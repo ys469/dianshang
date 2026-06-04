@@ -1,0 +1,25 @@
+{
+  "name": "@smart-member/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:h5": "vite",
+    "build:h5": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-alpha-5010220260529001",
+    "pinia": "^3.0.3",
+    "vue": "3.4.21"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "^3.4.16",
+    "@dcloudio/vite-plugin-uni": "3.0.0-alpha-5010220260529001",
+    "@vue/compiler-sfc": "3.4.21",
+    "typescript": "^5.8.3",
+    "vite": "5.2.8",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^2.2.10"
+  }
+}

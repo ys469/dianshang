@@ -1,0 +1,51 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: smart-member-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: smart_member_mall
+    ports:
+      - "3306:3306"
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  redis:
+    image: redis:7
+    container_name: smart-member-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  api:
+    image: node:22
+    container_name: smart-member-api
+    working_dir: /app
+    command: sh -c "npm install && npm run dev:api"
+    environment:
+      PORT: 3000
+      JWT_SECRET: smart-member-dev-secret
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: 123456
+      MYSQL_DATABASE: smart_member_mall
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app
+    depends_on:
+      - mysql
+      - redis
+
+volumes:
+  mysql-data:
+  redis-data:

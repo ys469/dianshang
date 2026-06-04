@@ -1,0 +1,11 @@
+{
+  "name": "智能会员商城系统",
+  "appid": "__UNI__SMART_MEMBER_MALL",
+  "description": "面向社区团购与会员超市的会员商城系统",
+  "versionName": "0.1.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "app-plus": {
+    "usingComponents": true
+  }
+}
