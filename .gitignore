@@ -23,3 +23,5 @@ apps/**/dist/
 apps/**/.vite/
 apps/**/.output/
 apps/**/coverage/
+runtime-logs/
+apps/api/apps/

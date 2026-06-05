@@ -1,0 +1,33 @@
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY packages/shared/package.json packages/shared/package.json
+
+RUN npm ci
+
+COPY . .
+
+RUN npm run build:shared && npm run build:api
+
+FROM node:22-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY packages/shared/package.json packages/shared/package.json
+
+RUN npm ci --omit=dev --workspace apps/api --workspace packages/shared
+
+COPY --from=builder /app/apps/api/dist apps/api/dist
+COPY --from=builder /app/packages/shared/dist packages/shared/dist
+COPY apps/api/.env.example apps/api/.env.example
+
+EXPOSE 3000
+
+CMD ["node", "apps/api/dist/main.js"]

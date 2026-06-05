@@ -11,6 +11,7 @@
     "dev:api": "npm run start:dev --workspace apps/api",
     "dev:admin": "npm run dev --workspace apps/admin",
     "dev:mobile": "npm run dev:h5 --workspace apps/mobile",
+    "dev": "concurrently -n API,Admin -c blue,green \"npm run dev:api\" \"npm run dev:admin\"",
     "test:shared": "npm run test --workspace packages/shared",
     "test:api": "npm run test --workspace apps/api",
     "test:admin": "npm run test --workspace apps/admin",
@@ -23,8 +24,13 @@
     "build": "npm run build:shared && npm run build:api && npm run build:admin && npm run build:mobile"
   },
   "devDependencies": {
+    "@swc/core": "^1.15.40",
     "@types/node": "^24.0.1",
     "concurrently": "^9.1.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "unplugin-swc": "^1.5.9"
+  },
+  "dependencies": {
+    "@nestjs/serve-static": "^5.0.5"
   }
 }

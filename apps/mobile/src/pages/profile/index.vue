@@ -1,39 +1,67 @@
+<script setup lang="ts">
+import { computed } from 'vue';
+import { useAuthStore } from '../../stores/auth';
+
+const authStore = useAuthStore();
+
+const memberAssets = computed(() => [
+  { label: '余额', value: '¥120' },
+  { label: '积分', value: '580' },
+  { label: '优惠券', value: '4' },
+  { label: '累计订单', value: '32' }
+]);
+
+function goToLogin() {
+  uni.navigateTo({ url: '/pages/login/index' });
+}
+
+function handleLogout() {
+  uni.showModal({
+    title: '退出登录',
+    content: '确定要退出登录吗？',
+    success: (res) => {
+      if (res.confirm) {
+        authStore.logout();
+      }
+    }
+  });
+}
+
+function showTip(name: string) {
+  uni.showToast({ title: `「${name}」即将开放`, icon: 'none' });
+}
+</script>
+
 <template>
   <view class="page">
-    <view class="profile-card">
-      <view class="avatar">会</view>
+    <!-- User Card -->
+    <view class="profile-card" @tap="authStore.isAuthenticated ? null : goToLogin()">
+      <view class="avatar">{{ authStore.displayName.charAt(0) }}</view>
       <view class="profile-info">
-        <text class="name">星选会员</text>
-        <text class="level">黄金会员 · 成长值 960</text>
+        <text class="name">{{ authStore.displayName }}</text>
+        <text class="level">{{ authStore.memberLevel }} · 成长值 960</text>
+      </view>
+      <view v-if="authStore.isAuthenticated" class="logout-link" @tap.stop="handleLogout">
+        <text class="logout-text">退出</text>
       </view>
     </view>
 
+    <!-- Assets -->
     <view class="asset-grid">
-      <view class="asset-card">
-        <text class="asset-label">余额</text>
-        <text class="asset-value">¥120</text>
-      </view>
-      <view class="asset-card">
-        <text class="asset-label">积分</text>
-        <text class="asset-value">580</text>
-      </view>
-      <view class="asset-card">
-        <text class="asset-label">优惠券</text>
-        <text class="asset-value">4</text>
-      </view>
-      <view class="asset-card">
-        <text class="asset-label">累计订单</text>
-        <text class="asset-value">32</text>
+      <view v-for="asset in memberAssets" :key="asset.label" class="asset-card">
+        <text class="asset-label">{{ asset.label }}</text>
+        <text class="asset-value">{{ asset.value }}</text>
       </view>
     </view>
 
+    <!-- Menu -->
     <view class="menu-panel">
-      <view class="menu-item">我的订单</view>
-      <view class="menu-item">收货地址</view>
-      <view class="menu-item">签到奖励</view>
-      <view class="menu-item">积分商城</view>
-      <view class="menu-item">联系客服</view>
-      <view class="menu-item">设置</view>
+      <view class="menu-item" @tap="showTip('我的订单')">我的订单</view>
+      <view class="menu-item" @tap="showTip('收货地址')">收货地址</view>
+      <view class="menu-item" @tap="showTip('签到奖励')">签到奖励</view>
+      <view class="menu-item" @tap="showTip('积分商城')">积分商城</view>
+      <view class="menu-item" @tap="showTip('联系客服')">联系客服</view>
+      <view class="menu-item" @tap="showTip('设置')">设置</view>
     </view>
   </view>
 </template>
@@ -42,6 +70,7 @@
 .page {
   min-height: 100vh;
   padding: 24rpx;
+  background: #f5f7fa;
 }
 
 .profile-card,
@@ -74,6 +103,7 @@
 .profile-info {
   display: grid;
   gap: 10rpx;
+  flex: 1;
 }
 
 .name {
@@ -84,6 +114,15 @@
 .level {
   font-size: 24rpx;
   color: #64748b;
+}
+
+.logout-link {
+  padding: 8rpx 16rpx;
+}
+
+.logout-text {
+  font-size: 24rpx;
+  color: #dc2626;
 }
 
 .asset-grid {

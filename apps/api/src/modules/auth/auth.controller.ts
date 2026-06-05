@@ -1,35 +1,40 @@
-import { Body, Controller, Inject, Post } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { Body, Controller, Get, HttpCode, Inject, Post, UseGuards } from '@nestjs/common';
 import { ok } from '../../common/api-response';
-
-interface LoginBody {
-  mobile?: string;
-  password?: string;
-}
+import { CurrentUser } from '../../common/current-user.decorator';
+import { JwtAuthGuard } from '../../common/jwt-auth.guard';
+import { LoginDto, RegisterDto, ResetPasswordDto, SendSmsCodeDto } from './auth.dto';
+import { AuthService } from './auth.service';
 
 @Controller('auth')
 export class AuthController {
-  constructor(@Inject(JwtService) private readonly jwtService: JwtService) {}
+  constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
   @Post('login')
-  login(@Body() body: LoginBody) {
-    const token = this.jwtService.sign(
-      {
-        sub: 'u-001',
-        mobile: body.mobile ?? '13800000000',
-        role: 'member'
-      },
-      { secret: process.env.JWT_SECRET ?? 'smart-member-dev-secret' }
-    );
+  @HttpCode(200)
+  async login(@Body() body: LoginDto) {
+    return ok(await this.authService.login(body));
+  }
 
-    return ok({
-      token,
-      user: {
-        id: 'u-001',
-        nickname: '星选会员',
-        mobile: body.mobile ?? '13800000000',
-        memberLevel: '黄金会员'
-      }
-    });
+  @Post('send-sms-code')
+  @HttpCode(200)
+  async sendSmsCode(@Body() body: SendSmsCodeDto) {
+    return ok(await this.authService.sendSmsCode(body), 'sms code sent');
+  }
+
+  @Post('register')
+  async register(@Body() body: RegisterDto) {
+    return ok(await this.authService.register(body), 'registered');
+  }
+
+  @Post('reset-password')
+  @HttpCode(200)
+  async resetPassword(@Body() body: ResetPasswordDto) {
+    return ok(await this.authService.resetPassword(body), 'password reset');
+  }
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  async getCurrentUser(@CurrentUser() user: Record<string, unknown>) {
+    return ok(await this.authService.getCurrentUser(user));
   }
 }

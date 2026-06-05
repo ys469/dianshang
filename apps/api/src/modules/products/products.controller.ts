@@ -1,33 +1,23 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
 import { ok } from '../../common/api-response';
-import { categories, products } from '../../data/demo-data';
+import { RuntimeDataService } from '../runtime-data/runtime-data.service';
 
 @Controller()
 export class ProductsController {
+  constructor(@Inject(RuntimeDataService) private readonly runtimeDataService: RuntimeDataService) {}
+
   @Get('categories')
   getCategories() {
-    return ok(categories);
+    return ok(this.runtimeDataService.getCategories());
   }
 
   @Get('products')
   getProducts(@Query('categoryId') categoryId?: string) {
-    return ok(categoryId ? products.filter((item) => item.categoryId === categoryId) : products);
+    return ok(this.runtimeDataService.getPublicProducts(categoryId));
   }
 
   @Get('products/:id')
   getProductDetail(@Param('id') id: string) {
-    return ok(
-      products.find((item) => item.id === id) ?? {
-        id,
-        name: '未找到商品',
-        subtitle: '',
-        price: 0,
-        memberPrice: 0,
-        stock: 0,
-        sales: 0,
-        image: '',
-        tags: []
-      }
-    );
+    return ok(this.runtimeDataService.getProductDetail(id));
   }
 }
