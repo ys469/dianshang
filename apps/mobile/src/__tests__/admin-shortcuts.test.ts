@@ -1,23 +1,75 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDemoMallStore } from '../h5-preview/store';
+import type { MemberProfile } from '../services/api';
+
+const { getOrdersMock, getProfileMock, loginMock } = vi.hoisted(() => ({
+  loginMock: vi.fn(async (role: 'admin' | 'user', account: string) => ({
+    token: `${role}-token`,
+    user: {
+      id: role === 'admin' ? 'admin-1' : 'user-1',
+      role,
+      nickname: role === 'admin' ? '运营管理员' : '正式会员',
+      mobile: role === 'user' ? account : '',
+      memberLevel: role === 'user' ? 'Gold' : 'Admin'
+    }
+  })),
+  getProfileMock: vi.fn(async (): Promise<MemberProfile> => ({
+    id: 'user-1',
+    nickname: '正式会员',
+    mobile: '13800138000',
+    memberLevel: 'Gold',
+    balance: 0,
+    points: 0,
+    growthValue: 0,
+    coupons: 0,
+    totalOrders: 0,
+    totalSpent: 0,
+    lastOrderAt: null,
+    defaultConsignee: '正式会员',
+    contactMobile: '13800138000',
+    defaultAddress: 'Shanghai Pudong'
+  })),
+  getOrdersMock: vi.fn(async () => [])
+}));
+
+vi.mock('../services/api', async () => {
+  const actual = await vi.importActual<typeof import('../services/api')>('../services/api');
+
+  return {
+    ...actual,
+    authClient: {
+      ...actual.authClient,
+      login: loginMock
+    },
+    memberClient: {
+      ...actual.memberClient,
+      getProfile: getProfileMock,
+      getOrders: getOrdersMock
+    }
+  };
+});
 
 describe('admin shortcut state', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    loginMock.mockClear();
+    getProfileMock.mockClear();
+    getOrdersMock.mockClear();
   });
 
   it('defaults to the product shortcut after admin login', async () => {
     const store = useDemoMallStore();
 
-    await store.login({
+    const result = await store.login({
       role: 'admin',
-      account: 'admin',
-      password: 'admin123'
+      account: 'ops-admin',
+      password: 'secret123'
     });
 
+    expect(result.success).toBe(true);
     expect(store.activeAdminShortcut).toBe('products');
   });
 
@@ -26,8 +78,8 @@ describe('admin shortcut state', () => {
 
     await store.login({
       role: 'admin',
-      account: 'admin',
-      password: 'admin123'
+      account: 'ops-admin',
+      password: 'secret123'
     });
 
     const result = store.openAdminShortcut('finance');
@@ -39,7 +91,7 @@ describe('admin shortcut state', () => {
   it('blocks admin shortcuts for non-admin sessions', async () => {
     const store = useDemoMallStore();
 
-    await store.login({
+    const loginResult = await store.login({
       role: 'user',
       account: '13800138000',
       password: 'member123'
@@ -47,6 +99,7 @@ describe('admin shortcut state', () => {
 
     const result = store.openAdminShortcut('products');
 
+    expect(loginResult.success).toBe(true);
     expect(result.success).toBe(false);
     expect(store.activeAdminShortcut).toBeNull();
   });

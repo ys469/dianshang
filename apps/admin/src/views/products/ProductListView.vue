@@ -4,8 +4,8 @@ import { apiClient, type AdminProduct } from '../../services/api';
 
 const products = ref<AdminProduct[]>([]);
 const loading = ref(true);
-const errorMsg = ref('');
 const saving = ref(false);
+const errorMsg = ref('');
 const searchKeyword = ref('');
 const statusFilter = ref<'all' | 'in_stock' | 'low_stock'>('all');
 
@@ -24,6 +24,8 @@ const createForm = reactive({
   categoryId: 'food',
   name: '',
   subtitle: '',
+  description: '',
+  image: '',
   price: 59.9,
   memberPrice: 49.9,
   stock: 30,
@@ -38,59 +40,92 @@ onMounted(async () => {
   try {
     await loadProducts();
   } catch {
-    errorMsg.value = '加载商品数据失败';
+    errorMsg.value = '加载商品数据失败，请确认 API 服务已启动。';
   } finally {
     loading.value = false;
   }
 });
 
 const filteredProducts = computed(() => {
-  let list = products.value;
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase();
-    list = list.filter(
-      (product) =>
-        product.name.toLowerCase().includes(keyword) ||
-        product.subtitle.toLowerCase().includes(keyword)
-    );
-  }
-  if (statusFilter.value === 'in_stock') {
-    list = list.filter((product) => product.stock >= 50);
-  }
-  if (statusFilter.value === 'low_stock') {
-    list = list.filter((product) => product.stock > 0 && product.stock < 50);
-  }
-  return list;
+  const keyword = searchKeyword.value.trim().toLowerCase();
+
+  return products.value.filter((product) => {
+    const matchesKeyword =
+      !keyword ||
+      [
+        product.name,
+        product.subtitle,
+        product.description,
+        product.categoryName || product.categoryId,
+        product.tags.join(' ')
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(keyword);
+
+    if (!matchesKeyword) {
+      return false;
+    }
+
+    if (statusFilter.value === 'in_stock') {
+      return product.stock >= 50;
+    }
+    if (statusFilter.value === 'low_stock') {
+      return product.stock > 0 && product.stock < 50;
+    }
+
+    return true;
+  });
 });
 
 const summaryCards = computed(() => [
   { label: '商品总数', value: `${products.value.length}` },
-  { label: '低库存', value: `${products.value.filter((product) => product.stock < 50).length}` },
-  { label: '今日已售', value: `${products.value.reduce((sum, product) => sum + product.todaySold, 0)}` },
-  { label: '累计销量', value: `${products.value.reduce((sum, product) => sum + product.sales, 0)}` }
+  { label: '低库存商品', value: `${products.value.filter((item) => item.stock > 0 && item.stock < 50).length}` },
+  { label: '今日已售', value: `${products.value.reduce((sum, item) => sum + item.todaySold, 0)}` },
+  { label: '累计销量', value: `${products.value.reduce((sum, item) => sum + item.sales, 0)}` }
 ]);
 
-function getStockClass(stock: number): string {
+function getStockClass(stock: number) {
   if (stock >= 50) return 'tag-success';
   if (stock > 0) return 'tag-warning';
   return 'tag-danger';
 }
 
-function getStockText(stock: number): string {
-  if (stock >= 50) return '充足';
-  if (stock > 0) return '偏低';
-  return '售罄';
+function getStockText(stock: number) {
+  if (stock >= 50) return '库存充足';
+  if (stock > 0) return '库存偏低';
+  return '已售罄';
+}
+
+function resetCreateForm() {
+  createForm.categoryId = 'food';
+  createForm.name = '';
+  createForm.subtitle = '';
+  createForm.description = '';
+  createForm.image = '';
+  createForm.price = 59.9;
+  createForm.memberPrice = 49.9;
+  createForm.stock = 30;
+  createForm.tagsText = '新品,会员价';
 }
 
 async function handleCreateProduct() {
+  const name = createForm.name.trim();
+  if (!name) {
+    errorMsg.value = '请先填写商品名称。';
+    return;
+  }
+
   saving.value = true;
   errorMsg.value = '';
 
   try {
     const created = await apiClient.createProduct({
       categoryId: createForm.categoryId,
-      name: createForm.name.trim(),
+      name,
       subtitle: createForm.subtitle.trim(),
+      description: createForm.description.trim(),
+      image: createForm.image.trim(),
       price: Number(createForm.price),
       memberPrice: Number(createForm.memberPrice),
       stock: Number(createForm.stock),
@@ -101,14 +136,9 @@ async function handleCreateProduct() {
     });
 
     products.value.unshift(created);
-    createForm.name = '';
-    createForm.subtitle = '';
-    createForm.price = 59.9;
-    createForm.memberPrice = 49.9;
-    createForm.stock = 30;
-    createForm.tagsText = '新品,会员价';
+    resetCreateForm();
   } catch {
-    errorMsg.value = '新增商品失败，请确认 API 服务已启动';
+    errorMsg.value = '新增商品失败，请稍后重试。';
   } finally {
     saving.value = false;
   }
@@ -124,7 +154,7 @@ async function handleStockChange(product: AdminProduct, delta: number) {
       Object.assign(target, updated);
     }
   } catch {
-    errorMsg.value = delta > 0 ? '补货失败' : '减库存失败，可能库存不足';
+    errorMsg.value = delta > 0 ? '补货失败。' : '减库存失败，当前库存可能不足。';
   }
 }
 </script>
@@ -134,7 +164,7 @@ async function handleStockChange(product: AdminProduct, delta: number) {
     <div class="page-header">
       <div>
         <h3>商品管理</h3>
-        <p>新增商品、调整库存，并实时查看今日已售与累计销量</p>
+        <p>支持新增商品、设置图片和简介，并实时联动库存、今日销量和累计销量。</p>
       </div>
     </div>
 
@@ -150,13 +180,15 @@ async function handleStockChange(product: AdminProduct, delta: number) {
     <section class="create-panel">
       <div class="section-head">
         <h4>新增商品</h4>
-        <p>新商品创建后会立刻进入商品列表，并参与后续订单和销量统计</p>
+        <p>新商品创建后会立刻出现在后台列表，并参与会员下单与销售统计。</p>
       </div>
+
       <div class="form-grid">
         <label>
           <span>商品名称</span>
           <input v-model="createForm.name" type="text" placeholder="输入商品名称" />
         </label>
+
         <label>
           <span>所属分类</span>
           <select v-model="createForm.categoryId">
@@ -165,27 +197,47 @@ async function handleStockChange(product: AdminProduct, delta: number) {
             </option>
           </select>
         </label>
-        <label class="wide">
-          <span>副标题</span>
-          <input v-model="createForm.subtitle" type="text" placeholder="输入副标题" />
-        </label>
-        <label>
-          <span>销售价</span>
-          <input v-model="createForm.price" type="number" min="0" step="0.1" />
-        </label>
-        <label>
-          <span>会员价</span>
-          <input v-model="createForm.memberPrice" type="number" min="0" step="0.1" />
-        </label>
+
         <label>
           <span>初始库存</span>
           <input v-model="createForm.stock" type="number" min="0" step="1" />
         </label>
+
         <label class="wide">
+          <span>副标题</span>
+          <input v-model="createForm.subtitle" type="text" placeholder="例如：门店爆款、会员专享、限时补货" />
+        </label>
+
+        <label class="wide">
+          <span>商品图片</span>
+          <input v-model="createForm.image" type="url" placeholder="输入商品图片 URL" />
+        </label>
+
+        <label class="wide">
+          <span>商品简介</span>
+          <textarea
+            v-model="createForm.description"
+            rows="4"
+            placeholder="输入适合展示在商品卡片和详情页的简介"
+          />
+        </label>
+
+        <label>
+          <span>销售价</span>
+          <input v-model="createForm.price" type="number" min="0" step="0.1" />
+        </label>
+
+        <label>
+          <span>会员价</span>
+          <input v-model="createForm.memberPrice" type="number" min="0" step="0.1" />
+        </label>
+
+        <label>
           <span>标签</span>
-          <input v-model="createForm.tagsText" type="text" placeholder="用英文逗号分隔" />
+          <input v-model="createForm.tagsText" type="text" placeholder="用英文逗号分隔，如：新品,爆款" />
         </label>
       </div>
+
       <div class="create-actions">
         <button class="primary-btn" :disabled="saving || !createForm.name.trim()" @click="handleCreateProduct">
           {{ saving ? '提交中...' : '新增商品' }}
@@ -197,8 +249,8 @@ async function handleStockChange(product: AdminProduct, delta: number) {
       <input
         v-model="searchKeyword"
         class="search-box"
-        placeholder="搜索商品名称或副标题..."
         type="text"
+        placeholder="搜索商品名称、简介、分类或标签..."
       />
       <div class="filter-tabs">
         <button :class="{ active: statusFilter === 'all' }" @click="statusFilter = 'all'">全部</button>
@@ -213,7 +265,7 @@ async function handleStockChange(product: AdminProduct, delta: number) {
       <table class="data-table">
         <thead>
           <tr>
-            <th>商品名称</th>
+            <th>商品信息</th>
             <th>分类</th>
             <th>销售价</th>
             <th>会员价</th>
@@ -227,9 +279,13 @@ async function handleStockChange(product: AdminProduct, delta: number) {
         <tbody>
           <tr v-for="product in filteredProducts" :key="product.id">
             <td>
-              <div class="product-title-cell">
-                <strong>{{ product.name }}</strong>
-                <span>{{ product.subtitle }}</span>
+              <div class="product-cell">
+                <img :src="product.image" :alt="product.name" class="product-thumb" />
+                <div class="product-copy">
+                  <strong>{{ product.name }}</strong>
+                  <span>{{ product.subtitle || '暂无副标题' }}</span>
+                  <p>{{ product.description || '暂无商品简介' }}</p>
+                </div>
               </div>
             </td>
             <td>{{ product.categoryName || product.categoryId }}</td>
@@ -243,7 +299,9 @@ async function handleStockChange(product: AdminProduct, delta: number) {
             <td>{{ product.todaySold }}</td>
             <td>{{ product.sales }}</td>
             <td>
-              <span v-for="tag in product.tags" :key="tag" class="product-tag">{{ tag }}</span>
+              <div class="tag-list">
+                <span v-for="tag in product.tags" :key="tag" class="product-tag">{{ tag }}</span>
+              </div>
             </td>
             <td>
               <div class="action-row">
@@ -328,16 +386,24 @@ async function handleStockChange(product: AdminProduct, delta: number) {
 
 .form-grid input,
 .form-grid select,
+.form-grid textarea,
 .search-box {
   padding: 10px 12px;
   border: 1px solid #d1d5db;
   border-radius: 6px;
   font-size: 14px;
   outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.form-grid textarea {
+  resize: vertical;
 }
 
 .form-grid input:focus,
 .form-grid select:focus,
+.form-grid textarea:focus,
 .search-box:focus {
   border-color: #667eea;
 }
@@ -393,7 +459,7 @@ async function handleStockChange(product: AdminProduct, delta: number) {
 }
 
 .search-box {
-  width: 280px;
+  width: 320px;
 }
 
 .filter-tabs {
@@ -423,18 +489,43 @@ async function handleStockChange(product: AdminProduct, delta: number) {
   color: #64748b;
 }
 
-.product-title-cell {
+.product-cell {
   display: grid;
-  gap: 6px;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
 }
 
-.product-title-cell strong {
+.product-thumb {
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #f3f4f6;
+}
+
+.product-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.product-copy strong {
   color: #111827;
 }
 
-.product-title-cell span {
+.product-copy span,
+.product-copy p {
+  margin: 0;
   font-size: 12px;
   color: #64748b;
+}
+
+.product-copy p {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .stock-tag {
@@ -445,15 +536,30 @@ async function handleStockChange(product: AdminProduct, delta: number) {
   font-weight: 500;
 }
 
-.tag-success { background: #dcfce7; color: #166534; }
-.tag-warning { background: #fef9c3; color: #854d0e; }
-.tag-danger { background: #fee2e2; color: #991b1b; }
+.tag-success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.tag-warning {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.tag-danger {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 
 .product-tag {
   display: inline-block;
   padding: 2px 8px;
-  margin-right: 4px;
-  margin-bottom: 4px;
   border-radius: 4px;
   background: #ede9fe;
   color: #5b21b6;

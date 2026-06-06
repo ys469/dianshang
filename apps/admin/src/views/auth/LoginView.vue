@@ -22,8 +22,8 @@ let resetTimer: ReturnType<typeof setInterval> | null = null;
 
 const form = reactive({
   role: 'admin' as 'admin' | 'user',
-  account: 'admin',
-  password: 'admin123',
+  account: '',
+  password: '',
   mobile: '',
   nickname: '',
   smsCode: '',
@@ -90,21 +90,10 @@ async function handleSendCode(scene: 'register' | 'reset_password') {
 
   sendingScene.value = scene;
   try {
-    const result = await authStore.sendSmsCode(mobile, scene);
-    if (scene === 'register' && result.debugCode) {
-      form.smsCode = result.debugCode;
-    }
-    if (scene === 'reset_password' && result.debugCode) {
-      form.resetSmsCode = result.debugCode;
-    }
+    await authStore.sendSmsCode(mobile, scene);
 
     startCountdown(scene);
-    setMessage(
-      'success',
-      result.debugCode
-        ? `验证码已发送，当前开发验证码为 ${result.debugCode}`
-        : '验证码已发送，请留意短信'
-    );
+    setMessage('success', '验证码已发送，请留意短信');
   } catch (error: unknown) {
     setMessage('error', error instanceof Error ? error.message : '验证码发送失败');
   } finally {
@@ -481,8 +470,7 @@ onUnmounted(() => {
       </form>
 
       <div class="helper-box">
-        <p>管理员测试账号：admin / admin123</p>
-        <p>会员测试账号：13800138000 / member123</p>
+        <p>管理员账号由平台统一分配，会员账号请在商城前台注册或使用手机号找回密码。</p>
       </div>
 
       <div class="auth-footer">

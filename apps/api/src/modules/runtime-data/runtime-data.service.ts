@@ -19,6 +19,7 @@ interface ProductRecord {
   categoryId: string;
   name: string;
   subtitle: string;
+  description: string;
   price: number;
   memberPrice: number;
   stock: number;
@@ -64,6 +65,8 @@ interface MemberRecord {
   totalOrders: number;
   totalSpent: number;
   lastOrderAt: string | null;
+  defaultConsignee: string;
+  contactMobile: string;
   defaultAddress: string;
 }
 
@@ -140,6 +143,7 @@ interface CreateProductInput {
   categoryId: string;
   name: string;
   subtitle?: string;
+  description?: string;
   price: number;
   memberPrice: number;
   stock: number;
@@ -243,6 +247,7 @@ export class RuntimeDataService {
   private products: ProductRecord[] = seedProducts.map((item) => ({
     ...item,
     subtitle: item.subtitle ?? '',
+    description: '',
     tags: [...item.tags],
     createdAt: createIso(15)
   }));
@@ -378,6 +383,7 @@ export class RuntimeDataService {
           id,
           name: '未找到商品',
           subtitle: '',
+          description: '',
           price: 0,
           memberPrice: 0,
           stock: 0,
@@ -402,12 +408,13 @@ export class RuntimeDataService {
       id: `p-${String(this.products.length + 1).padStart(3, '0')}`,
       categoryId: input.categoryId,
       name: input.name,
+      description: input.description?.trim() || '',
       subtitle: input.subtitle?.trim() || '后台新增商品',
       price: roundMoney(input.price),
       memberPrice: roundMoney(input.memberPrice),
       stock: input.stock,
       sales: 0,
-      image: input.image || this.banners[0]?.image || '',
+      image: input.image?.trim() || this.banners[0]?.image || '',
       tags: input.tags?.length ? uniqueTags(input.tags) : ['新品'],
       createdAt: new Date().toISOString()
     };
@@ -471,7 +478,6 @@ export class RuntimeDataService {
       nickname: input.customerName,
       mobile: input.customerMobile,
       memberLevel: input.memberLevel ?? '普通会员',
-      initialBalance: 120
     });
 
     const totalAmount = roundMoney(
@@ -515,6 +521,8 @@ export class RuntimeDataService {
     member.growthValue += Math.floor(payableAmount);
     member.lastOrderAt = new Date().toISOString();
     if (input.fulfillmentMode === 'delivery') {
+      member.defaultConsignee = input.customerName;
+      member.contactMobile = input.customerMobile;
       member.defaultAddress = input.address;
     }
 
@@ -653,16 +661,51 @@ export class RuntimeDataService {
       this.findMember(input.authUserId ?? null, input.mobile ?? null) ??
       this.ensureMemberProfile({
         authUserId: input.authUserId ?? null,
-        mobile: input.mobile ?? '13800138000',
+        mobile: input.mobile ?? '',
         nickname: input.nickname ?? '商城会员',
         memberLevel: input.memberLevel ?? '普通会员',
-        initialBalance: 120
       });
 
-    return {
-      ...this.toAdminMember(member),
-      defaultAddress: member.defaultAddress
-    };
+    return this.toMemberProfile(member);
+  }
+
+  updateMemberProfile(input: {
+    authUserId?: string | null;
+    mobile?: string | null;
+    nickname?: string;
+    memberLevel?: string | null;
+    defaultConsignee?: string;
+    contactMobile?: string;
+    defaultAddress?: string;
+  }) {
+    const member =
+      this.findMember(input.authUserId ?? null, input.mobile ?? null) ??
+      this.ensureMemberProfile({
+        authUserId: input.authUserId ?? null,
+        mobile: input.mobile ?? '',
+        nickname: input.nickname ?? '商城会员',
+        memberLevel: input.memberLevel ?? '普通会员'
+      });
+
+    const defaultConsignee = input.defaultConsignee?.trim();
+    const contactMobile = input.contactMobile?.trim();
+    const defaultAddress = input.defaultAddress?.trim();
+
+    if (!defaultConsignee) {
+      throw new BadRequestException('收货人不能为空');
+    }
+    if (!contactMobile || !/^1[3-9]\d{9}$/.test(contactMobile)) {
+      throw new BadRequestException('联系电话格式不正确');
+    }
+    if (!defaultAddress) {
+      throw new BadRequestException('收货地址不能为空');
+    }
+
+    member.defaultConsignee = defaultConsignee;
+    member.contactMobile = contactMobile;
+    member.defaultAddress = defaultAddress;
+
+    return this.toMemberProfile(member);
   }
 
   rechargeMember(input: {
@@ -678,10 +721,9 @@ export class RuntimeDataService {
 
     const member = this.ensureMemberProfile({
       authUserId: input.authUserId ?? null,
-      mobile: input.mobile ?? '13800138000',
+      mobile: input.mobile ?? '',
       nickname: input.nickname ?? '商城会员',
       memberLevel: input.memberLevel ?? '普通会员',
-      initialBalance: 120
     });
 
     const bonusAmount = getRechargeBonus(input.amount);
@@ -982,6 +1024,12 @@ export class RuntimeDataService {
       if (!existing.memberLevel && input.memberLevel) {
         existing.memberLevel = input.memberLevel;
       }
+      if (!existing.defaultConsignee) {
+        existing.defaultConsignee = existing.nickname;
+      }
+      if (!existing.contactMobile) {
+        existing.contactMobile = existing.mobile;
+      }
       return existing;
     }
 
@@ -991,13 +1039,15 @@ export class RuntimeDataService {
       nickname: input.nickname,
       mobile: input.mobile,
       memberLevel: input.memberLevel || '普通会员',
-      balance: roundMoney(input.initialBalance ?? 120),
+      balance: roundMoney(input.initialBalance ?? 0),
       points: 0,
       growthValue: 0,
       coupons: 0,
       totalOrders: 0,
       totalSpent: 0,
       lastOrderAt: null,
+      defaultConsignee: input.nickname,
+      contactMobile: input.mobile,
       defaultAddress: '上海市浦东新区张江路 88 号 星选生活馆'
     };
 
@@ -1119,6 +1169,8 @@ export class RuntimeDataService {
           memberOrders.reduce((sum, order) => sum + order.payableAmount, 0)
         ),
         lastOrderAt: memberOrders[0]?.createdAt ?? null,
+        defaultConsignee: member.nickname,
+        contactMobile: mobile,
         defaultAddress: '上海市浦东新区张江路 88 号 星选生活馆'
       } satisfies MemberRecord;
     });
@@ -1167,6 +1219,7 @@ export class RuntimeDataService {
       categoryId: product.categoryId,
       name: product.name,
       subtitle: product.subtitle,
+      description: product.description,
       price: product.price,
       memberPrice: product.memberPrice,
       stock: product.stock,
@@ -1222,6 +1275,15 @@ export class RuntimeDataService {
       totalOrders: member.totalOrders,
       totalSpent: member.totalSpent,
       lastOrderAt: member.lastOrderAt
+    };
+  }
+
+  private toMemberProfile(member: MemberRecord) {
+    return {
+      ...this.toAdminMember(member),
+      defaultConsignee: member.defaultConsignee,
+      contactMobile: member.contactMobile,
+      defaultAddress: member.defaultAddress
     };
   }
 }

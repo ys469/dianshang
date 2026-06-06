@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Patch, Post, UseGuards } from '@nestjs/common';
 import { ok } from '../../common/api-response';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
@@ -26,6 +26,36 @@ export class MemberController {
         nickname: user?.nickname,
         memberLevel: user?.memberLevel ?? null
       })
+    );
+  }
+
+  @Patch('profile')
+  updateProfile(
+    @Body()
+    body: {
+      defaultConsignee?: string;
+      contactMobile?: string;
+      defaultAddress?: string;
+    },
+    @CurrentUser()
+    user?: {
+      sub?: string;
+      mobile?: string | null;
+      nickname?: string;
+      memberLevel?: string | null;
+    }
+  ) {
+    return ok(
+      this.runtimeDataService.updateMemberProfile({
+        authUserId: user?.sub ?? null,
+        mobile: user?.mobile ?? null,
+        nickname: user?.nickname,
+        memberLevel: user?.memberLevel ?? null,
+        defaultConsignee: body.defaultConsignee,
+        contactMobile: body.contactMobile,
+        defaultAddress: body.defaultAddress
+      }),
+      'member profile updated'
     );
   }
 

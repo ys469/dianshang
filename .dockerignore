@@ -1,0 +1,9 @@
+.git
+.logs
+.superpowers
+runtime-logs
+node_modules
+**/node_modules
+**/dist
+*.log
+codex-smart-member-mall.bundle

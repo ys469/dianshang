@@ -45,6 +45,7 @@ export class AdminController {
       stock: number;
       tags?: string[];
       image?: string;
+      description?: string;
     }
   ) {
     return ok(this.runtimeDataService.createProduct(body), 'product created');

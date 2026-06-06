@@ -86,21 +86,10 @@ async function handleSendCode(scene: 'register' | 'reset_password') {
 
   sendingScene.value = scene;
   try {
-    const result = await authStore.sendSmsCode(mobile, scene);
-    if (scene === 'register' && result.debugCode) {
-      form.smsCode = result.debugCode;
-    }
-    if (scene === 'reset_password' && result.debugCode) {
-      form.resetSmsCode = result.debugCode;
-    }
+    await authStore.sendSmsCode(mobile, scene);
 
     startCountdown(scene);
-    setMessage(
-      'success',
-      result.debugCode
-        ? `验证码已发送，当前开发验证码为 ${result.debugCode}`
-        : '验证码已发送，请留意短信'
-    );
+    setMessage('success', '验证码已发送，请留意短信');
   } catch (error: unknown) {
     setMessage('error', error instanceof Error ? error.message : '验证码发送失败');
   } finally {

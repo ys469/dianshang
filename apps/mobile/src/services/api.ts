@@ -83,6 +83,8 @@ export interface MemberProfile {
   totalOrders: number;
   totalSpent: number;
   lastOrderAt: string | null;
+  defaultConsignee: string;
+  contactMobile: string;
   defaultAddress: string;
 }
 
@@ -286,6 +288,17 @@ export const memberClient = {
   async getProfile() {
     return fetchJson<MemberProfile>('/member/profile', {
       method: 'GET'
+    });
+  },
+
+  async updateProfile(payload: {
+    defaultConsignee: string;
+    contactMobile: string;
+    defaultAddress: string;
+  }) {
+    return fetchJson<MemberProfile>('/member/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
     });
   },
 

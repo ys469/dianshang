@@ -13,6 +13,8 @@ export interface AdminProduct {
   categoryName?: string;
   name: string;
   subtitle: string;
+  description: string;
+  image: string;
   price: number;
   memberPrice: number;
   stock: number;
@@ -131,6 +133,8 @@ export interface CreateProductInput {
   categoryId: string;
   name: string;
   subtitle?: string;
+  description?: string;
+  image?: string;
   price: number;
   memberPrice: number;
   stock: number;

@@ -12,7 +12,7 @@ onMounted(async () => {
   try {
     await store.fetchSummary();
   } catch (e) {
-    errorMsg.value = '加载仪表盘数据失败，已使用演示数据';
+    errorMsg.value = '加载仪表盘数据失败，请稍后刷新重试';
   } finally {
     loading.value = false;
   }

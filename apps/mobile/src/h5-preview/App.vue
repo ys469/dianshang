@@ -53,12 +53,12 @@ const authView = ref<AuthView>('login');
 
 const loginForm = reactive({
   user: {
-    account: '13800138000',
-    password: 'member123'
+    account: '',
+    password: ''
   },
   admin: {
-    account: 'admin',
-    password: 'admin123'
+    account: '',
+    password: ''
   }
 });
 
@@ -90,8 +90,10 @@ const {
   cart,
   cartCount,
   cartTotal,
+  contactMobile,
   coupons,
   currentUserName,
+  defaultConsignee,
   defaultAddress,
   feedbackMessage,
   isAdmin,
@@ -106,6 +108,12 @@ const {
   unreadMessages,
   walletBalance
 } = storeToRefs(mallStore);
+
+const addressForm = reactive({
+  defaultConsignee: '',
+  contactMobile: '',
+  defaultAddress: ''
+});
 
 onMounted(() => {
   void homeStore.fetchHome();
@@ -271,6 +279,25 @@ async function handleCheckout() {
 
 function handleProfileAction(action: ProfileAction) {
   void mallStore.handleProfileAction(action);
+  if (action === 'address') {
+    addressForm.defaultConsignee = defaultConsignee.value;
+    addressForm.contactMobile = contactMobile.value;
+    addressForm.defaultAddress = defaultAddress.value;
+  }
+}
+
+async function handleSaveAddress() {
+  const result = await mallStore.updateDeliveryProfile({
+    defaultConsignee: addressForm.defaultConsignee,
+    contactMobile: addressForm.contactMobile,
+    defaultAddress: addressForm.defaultAddress
+  });
+
+  if (result.success) {
+    addressForm.defaultConsignee = defaultConsignee.value;
+    addressForm.contactMobile = contactMobile.value;
+    addressForm.defaultAddress = defaultAddress.value;
+  }
 }
 
 function handleAdminShortcut(shortcut: AdminShortcutKey) {
@@ -320,13 +347,6 @@ async function handleSendCode(scene: 'register' | 'reset_password') {
   const result = await mallStore.sendSmsCode(mobile, scene);
   if (!result.success) {
     return;
-  }
-
-  if (scene === 'register' && result.debugCode) {
-    registerForm.smsCode = result.debugCode;
-  }
-  if (scene === 'reset_password' && result.debugCode) {
-    resetForm.smsCode = result.debugCode;
   }
 
   startCountdown(scene);
@@ -401,7 +421,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
           <h1>
             {{
               authView === 'login'
-                ? '登录演示入口'
+                ? '账号登录'
                 : authView === 'register'
                   ? '注册会员账号'
                   : '找回会员密码'
@@ -413,7 +433,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
                 ? '会员端和管理员端分开登录，会员账号支持注册与密码重置。'
                 : authView === 'register'
                   ? '注册时需要二次确认密码，注册成功后会自动登录到会员账号。'
-                  : '当前版本通过手机号加昵称校验重置密码，正式商用建议接入短信验证码。'
+                  : '通过短信验证码验证身份后，可为会员账号重置登录密码。'
             }}
           </p>
         </div>
@@ -573,9 +593,8 @@ function handleLogout(nextRole: LoginRole = 'user') {
           </label>
           <button type="submit" class="primary-button wide">重置密码</button>
         </form>
-        <div class="demo-credentials">
-          <p>会员测试账号：13800138000 / member123</p>
-          <p>管理员测试账号：admin / admin123</p>
+        <div class="auth-notice">
+          <p>会员账号可直接注册，管理员账号由平台统一分配与维护。</p>
         </div>
 
         <div class="auth-switches">
@@ -597,106 +616,6 @@ function handleLogout(nextRole: LoginRole = 'user') {
           </button>
         </div>
 
-        <div v-if="false">
-        <div class="auth-hero">
-          <p class="eyebrow">智能会员商城系统</p>
-          <h1>{{ authView === 'login' ? '登录演示入口' : '注册会员账号' }}</h1>
-          <p class="auth-copy">
-            {{
-              authView === 'login'
-                ? '用户端和管理员端分开登录。会员账号可以直接注册，注册后会写入真实账号库并自动登录。'
-                : '注册完成后会自动登录会员账号，后续下单、充值和后台会员数据会直接关联。'
-            }}
-          </p>
-        </div>
-
-        <div v-if="authView === 'login'" class="auth-tabs">
-          <button
-            type="button"
-            class="auth-tab"
-            :class="{ active: authMode === 'user' }"
-            @click="authMode = 'user'"
-          >
-            会员登录
-          </button>
-          <button
-            type="button"
-            class="auth-tab"
-            :class="{ active: authMode === 'admin' }"
-            @click="authMode = 'admin'"
-          >
-            管理员登录
-          </button>
-        </div>
-
-        <form
-          v-if="authView === 'login'"
-          class="auth-form"
-          @submit.prevent="handleLogin(authMode)"
-        >
-          <label class="field">
-            <span>{{ authMode === 'user' ? '手机号 / 账号' : '管理员账号' }}</span>
-            <input
-              :value="loginForm[authMode].account"
-              type="text"
-              @input="loginForm[authMode].account = ($event.target as HTMLInputElement).value"
-            />
-          </label>
-          <label class="field">
-            <span>密码</span>
-            <input
-              :value="loginForm[authMode].password"
-              type="password"
-              @input="loginForm[authMode].password = ($event.target as HTMLInputElement).value"
-            />
-          </label>
-          <button type="submit" class="primary-button wide">
-            {{ authMode === 'user' ? '进入会员商城' : '进入管理后台' }}
-          </button>
-        </form>
-
-        <form v-else class="auth-form" @submit.prevent="handleRegister">
-          <label class="field">
-            <span>手机号</span>
-            <input
-              :value="registerForm.mobile"
-              type="text"
-              maxlength="11"
-              @input="registerForm.mobile = ($event.target as HTMLInputElement).value"
-            />
-          </label>
-          <label class="field">
-            <span>昵称</span>
-            <input
-              :value="registerForm.nickname"
-              type="text"
-              @input="registerForm.nickname = ($event.target as HTMLInputElement).value"
-            />
-          </label>
-          <label class="field">
-            <span>密码</span>
-            <input
-              :value="registerForm.password"
-              type="password"
-              @input="registerForm.password = ($event.target as HTMLInputElement).value"
-            />
-          </label>
-          <button type="submit" class="primary-button wide">注册并进入会员商城</button>
-        </form>
-
-        <div class="demo-credentials">
-          <p>会员测试账号：13800138000 / member123</p>
-          <p>管理员测试账号：admin / admin123</p>
-        </div>
-
-        <button
-          type="button"
-          class="ghost-button wide"
-          @click="authView = authView === 'login' ? 'register' : 'login'"
-        >
-          {{ authView === 'login' ? '没有账号？注册会员' : '已有账号？返回登录' }}
-        </button>
-        </div>
       </section>
     </div>
 
@@ -751,7 +670,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
       <header class="topbar">
         <div>
           <p class="eyebrow">智能会员商城系统</p>
-          <h1>会员商城 H5 预览</h1>
+          <h1>会员商城</h1>
           <p class="muted-text">{{ currentUserName }} 已登录</p>
         </div>
         <div class="header-actions">
@@ -913,7 +832,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
 
             <div v-else class="empty-state">
               <h2>购物车还是空的</h2>
-              <p>从首页挑几件商品，马上就能下单演示。</p>
+              <p>从首页挑选商品加入购物车后，就可以提交订单。</p>
               <button type="button" class="ghost-button" @click="jumpToTab('home')">去逛逛</button>
             </div>
 
@@ -934,7 +853,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
             <div>
               <p class="eyebrow">会员中心</p>
               <h2>{{ currentUserName }}</h2>
-              <p class="muted-text">成长值 {{ points }}，钱包余额可直接用于下单演示</p>
+              <p class="muted-text">成长值 {{ points }}，钱包余额可用于购物与充值消费。</p>
             </div>
           </section>
 
@@ -1015,14 +934,44 @@ function handleLogout(nextRole: LoginRole = 'user') {
           </div>
 
           <div v-else-if="activePanel === 'address'" class="panel-content">
+            <div class="panel-form">
+              <label class="panel-field">
+                <span>收货人</span>
+                <input
+                  :value="addressForm.defaultConsignee"
+                  type="text"
+                  placeholder="填写收货人姓名"
+                  @input="addressForm.defaultConsignee = ($event.target as HTMLInputElement).value"
+                />
+              </label>
+              <label class="panel-field">
+                <span>联系电话</span>
+                <input
+                  :value="addressForm.contactMobile"
+                  type="text"
+                  maxlength="11"
+                  placeholder="填写联系电话"
+                  @input="addressForm.contactMobile = ($event.target as HTMLInputElement).value"
+                />
+              </label>
+              <label class="panel-field">
+                <span>收货地址</span>
+                <textarea
+                  :value="addressForm.defaultAddress"
+                  class="panel-textarea"
+                  rows="4"
+                  placeholder="填写详细收货地址"
+                  @input="addressForm.defaultAddress = ($event.target as HTMLTextAreaElement).value"
+                />
+              </label>
+            </div>
             <article class="info-card">
-              <strong>默认收货地址</strong>
-              <p>{{ defaultAddress }}</p>
+              <strong>当前默认地址</strong>
+              <p>{{ defaultAddress || '还没有保存收货地址' }}</p>
             </article>
-            <article class="info-card">
-              <strong>配送方式</strong>
-              <p>支持送货上门和门店自提两种模式。</p>
-            </article>
+            <button type="button" class="member-button action-button" @click="handleSaveAddress">
+              保存收货信息
+            </button>
           </div>
 
           <div v-else-if="activePanel === 'wallet'" class="panel-content">
@@ -1175,7 +1124,7 @@ p {
 .summary-savings,
 .stat-card span,
 .field span,
-.demo-credentials p,
+.auth-notice p,
 .empty-state p {
   color: #667085;
   font-size: 13px;
@@ -1324,6 +1273,35 @@ p {
 
 .field input:focus,
 .search-input:focus {
+  border-color: rgba(124, 77, 255, 0.36);
+}
+
+.panel-form,
+.panel-field {
+  display: grid;
+  gap: 10px;
+}
+
+.panel-field span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.panel-field input,
+.panel-textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: #f7f5ff;
+  color: #374151;
+  outline: none;
+  resize: vertical;
+}
+
+.panel-field input:focus,
+.panel-textarea:focus {
   border-color: rgba(124, 77, 255, 0.36);
 }
 

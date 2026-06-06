@@ -51,13 +51,21 @@ export class OrdersController {
       })) ??
       [];
 
-    const customerMobile = body.mobile || user?.mobile || '';
-    const customerName = body.consignee || user?.nickname || '商城用户';
+    const memberProfile = this.runtimeDataService.getMemberProfile({
+      authUserId: user?.sub ?? null,
+      mobile: user?.mobile ?? null,
+      nickname: user?.nickname,
+      memberLevel: user?.memberLevel ?? null
+    });
+
+    const customerMobile = body.mobile || memberProfile.contactMobile || user?.mobile || '';
+    const customerName =
+      body.consignee || memberProfile.defaultConsignee || user?.nickname || '商城用户';
     const address =
       body.address ||
       (body.fulfillmentMode === 'pickup'
         ? body.pickupSiteId || '门店自提点'
-        : '待补充收货地址');
+        : memberProfile.defaultAddress || '待补充收货地址');
 
     const newOrder = this.runtimeDataService.createOrder({
       fulfillmentMode: body.fulfillmentMode,

@@ -92,26 +92,19 @@ export const adminShortcutDefinitions: AdminShortcutDefinition[] = [
   { key: 'notifications', label: '消息通知', description: '查看订单、发货和系统通知' }
 ];
 
-const INITIAL_WALLET_BALANCE = 520;
-const INITIAL_POINTS = 580;
+const INITIAL_WALLET_BALANCE = 0;
+const INITIAL_POINTS = 0;
+const INITIAL_COUPONS = 0;
 const TOKEN_KEY = 'smart-member-mobile-token';
 const USER_KEY = 'smart-member-mobile-user';
 
-const demoAccounts: Record<LoginRole, { account: string; password: string; name: string }> = {
-  user: {
-    account: '13800138000',
-    password: 'member123',
-    name: '星选会员'
-  },
-  admin: {
-    account: 'admin',
-    password: 'admin123',
-    name: '运营管理员'
-  }
-};
 
 function normalizeSearchValue(value: string) {
   return value.trim().toLowerCase();
+}
+
+function isValidMobile(value: string) {
+  return /^1[3-9]\d{9}$/.test(value);
 }
 
 export function filterProducts<T extends { name: string; tags: string[]; categoryId?: string | null }>(
@@ -199,13 +192,15 @@ export const useDemoMallStore = defineStore('demo-mall', {
     orders: [] as DemoOrder[],
     walletBalance: INITIAL_WALLET_BALANCE,
     points: INITIAL_POINTS,
-    coupons: 4,
+    coupons: INITIAL_COUPONS,
     dailyCheckInClaimed: false,
     activePanel: null as ActivePanel,
     activeAdminShortcut: null as AdminShortcutKey | null,
     selectedProduct: null as CatalogProduct | null,
     feedbackMessage: '',
     unreadMessages: 2,
+    defaultConsignee: '',
+    contactMobile: '',
     defaultAddress: '上海市浦东新区张江路 88 号 星选生活馆',
     supportReply: '在线客服通常会在 5 分钟内响应。'
   }),
@@ -217,11 +212,13 @@ export const useDemoMallStore = defineStore('demo-mall', {
   },
   actions: {
     applyMemberProfile(profile: MemberProfile) {
-      this.currentUserName = profile.nickname;
-      this.currentUserMobile = profile.mobile;
+      this.currentUserName = profile.defaultConsignee || profile.nickname;
+      this.currentUserMobile = profile.contactMobile || profile.mobile;
       this.walletBalance = profile.balance;
       this.points = profile.points;
       this.coupons = profile.coupons;
+      this.defaultConsignee = profile.defaultConsignee || profile.nickname;
+      this.contactMobile = profile.contactMobile || profile.mobile;
       this.defaultAddress = profile.defaultAddress || this.defaultAddress;
     },
 
@@ -242,6 +239,8 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.currentRole = payload.role;
         this.currentUserName = result.user.nickname;
         this.currentUserMobile = result.user.mobile ?? payload.account;
+        this.defaultConsignee = result.user.nickname;
+        this.contactMobile = result.user.mobile ?? payload.account;
         this.activeAdminShortcut = payload.role === 'admin' ? 'products' : null;
         setStorageItem(TOKEN_KEY, result.token);
         setStorageItem(USER_KEY, JSON.stringify(result.user));
@@ -252,33 +251,27 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
         this.feedbackMessage =
           payload.role === 'admin'
-            ? '管理员登录成功，已进入运营后台'
-            : '会员登录成功，欢迎回来';
+            ? '\u7ba1\u7406\u5458\u767b\u5f55\u6210\u529f\uff0c\u5df2\u8fdb\u5165\u8fd0\u8425\u540e\u53f0'
+            : '\u4f1a\u5458\u767b\u5f55\u6210\u529f\uff0c\u6b22\u8fce\u56de\u6765';
         return createResult(true, this.feedbackMessage);
       } catch (error) {
-        const account = demoAccounts[payload.role];
-        if (payload.account !== account.account || payload.password !== account.password) {
-          this.feedbackMessage =
-            error instanceof Error
-              ? error.message
-              : payload.role === 'admin'
-                ? '管理员账号或密码错误'
-                : '手机号或密码错误';
-          return createResult(false, this.feedbackMessage);
-        }
-
-        this.isAuthenticated = true;
+        this.isAuthenticated = false;
         this.currentRole = payload.role;
-        this.currentUserName = account.name;
-        this.currentUserMobile = payload.role === 'user' ? payload.account : '';
-        this.activeAdminShortcut = payload.role === 'admin' ? 'products' : null;
+        this.currentUserName = '';
+        this.currentUserMobile = '';
+        this.defaultConsignee = '';
+        this.contactMobile = '';
+        this.defaultAddress = '';
+        this.activeAdminShortcut = null;
         removeStorageItem(TOKEN_KEY);
         removeStorageItem(USER_KEY);
         this.feedbackMessage =
-          payload.role === 'admin'
-            ? '管理员登录成功，已进入运营后台'
-            : '会员登录成功，欢迎回来';
-        return createResult(true, this.feedbackMessage);
+          error instanceof Error
+            ? error.message
+            : payload.role === 'admin'
+              ? '\u7ba1\u7406\u5458\u8d26\u53f7\u6216\u5bc6\u7801\u9519\u8bef'
+              : '\u624b\u673a\u53f7\u6216\u5bc6\u7801\u9519\u8bef';
+        return createResult(false, this.feedbackMessage);
       }
     },
 
@@ -296,6 +289,8 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.currentRole = 'user';
         this.currentUserName = result.user.nickname;
         this.currentUserMobile = result.user.mobile ?? payload.mobile;
+        this.defaultConsignee = result.user.nickname;
+        this.contactMobile = result.user.mobile ?? payload.mobile;
         this.activeAdminShortcut = null;
         setStorageItem(TOKEN_KEY, result.token);
         setStorageItem(USER_KEY, JSON.stringify(result.user));
@@ -326,19 +321,58 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
     async sendSmsCode(mobile: string, scene: 'register' | 'reset_password') {
       try {
-        const result = await authClient.sendSmsCode(mobile, scene);
-        this.feedbackMessage = result.debugCode
-          ? `验证码已发送，开发验证码：${result.debugCode}`
-          : '验证码已发送，请查看短信';
+        await authClient.sendSmsCode(mobile, scene);
+        this.feedbackMessage = '\u9a8c\u8bc1\u7801\u5df2\u53d1\u9001\uff0c\u8bf7\u6ce8\u610f\u67e5\u6536\u77ed\u4fe1';
         return {
           success: true,
-          message: this.feedbackMessage,
-          debugCode: result.debugCode
+          message: this.feedbackMessage
         };
       } catch (error) {
-        this.feedbackMessage = error instanceof Error ? error.message : '验证码发送失败';
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '\u9a8c\u8bc1\u7801\u53d1\u9001\u5931\u8d25';
         return createResult(false, this.feedbackMessage);
       }
+    },
+
+    async updateDeliveryProfile(payload: {
+      defaultConsignee: string;
+      contactMobile: string;
+      defaultAddress: string;
+    }) {
+      const defaultConsignee = payload.defaultConsignee.trim();
+      const contactMobile = payload.contactMobile.trim();
+      const defaultAddress = payload.defaultAddress.trim();
+
+      if (!defaultConsignee) {
+        this.feedbackMessage = '请先填写收货人';
+        return createResult(false, this.feedbackMessage);
+      }
+      if (!isValidMobile(contactMobile)) {
+        this.feedbackMessage = '请输入正确的联系电话';
+        return createResult(false, this.feedbackMessage);
+      }
+      if (!defaultAddress) {
+        this.feedbackMessage = '请先填写收货地址';
+        return createResult(false, this.feedbackMessage);
+      }
+
+      try {
+        const profile = await memberClient.updateProfile({
+          defaultConsignee,
+          contactMobile,
+          defaultAddress
+        });
+        this.applyMemberProfile(profile);
+      } catch {
+        this.currentUserName = defaultConsignee;
+        this.currentUserMobile = contactMobile;
+        this.defaultConsignee = defaultConsignee;
+        this.contactMobile = contactMobile;
+        this.defaultAddress = defaultAddress;
+      }
+
+      this.feedbackMessage = '收货信息已保存';
+      return createResult(true, this.feedbackMessage);
     },
 
     logout() {
@@ -346,11 +380,14 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.currentRole = 'user';
       this.currentUserName = '';
       this.currentUserMobile = '';
+      this.defaultConsignee = '';
+      this.contactMobile = '';
       this.cart = [];
       this.orders = [];
       this.walletBalance = INITIAL_WALLET_BALANCE;
       this.points = INITIAL_POINTS;
-      this.coupons = 4;
+      this.coupons = INITIAL_COUPONS;
+      this.defaultAddress = '';
       this.activePanel = null;
       this.activeAdminShortcut = null;
       this.selectedProduct = null;
@@ -460,17 +497,26 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
     async checkoutItems(items: CartItem[]) {
       const total = calculateTotal(items);
+      const consignee = this.defaultConsignee.trim() || this.currentUserName.trim();
+      const contactMobile = this.contactMobile.trim() || this.currentUserMobile.trim();
+      const defaultAddress = this.defaultAddress.trim();
+
+      if (!consignee || !isValidMobile(contactMobile) || !defaultAddress) {
+        this.feedbackMessage =
+          '\u8bf7\u5148\u5b8c\u5584\u6536\u8d27\u4eba\u3001\u8054\u7cfb\u7535\u8bdd\u548c\u6536\u8d27\u5730\u5740';
+        return createResult(false, this.feedbackMessage);
+      }
       if (this.walletBalance < total) {
-        this.feedbackMessage = '余额不足，先去充值中心补一点吧';
+        this.feedbackMessage = '\u4f59\u989d\u4e0d\u8db3\uff0c\u8bf7\u5148\u5145\u503c\u540e\u518d\u63d0\u4ea4\u8ba2\u5355';
         return createResult(false, this.feedbackMessage);
       }
 
       try {
         const order = await ordersClient.create({
           fulfillmentMode: 'delivery',
-          consignee: this.currentUserName || '商城用户',
-          mobile: this.currentUserMobile || demoAccounts.user.account,
-          address: this.defaultAddress,
+          consignee,
+          mobile: contactMobile,
+          address: defaultAddress,
           items: items.map((item) => ({
             productId: item.id,
             quantity: item.quantity
@@ -497,18 +543,13 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
         this.activePanel = 'orders';
         this.selectedProduct = null;
-        this.feedbackMessage = `下单成功，订单 ${order.orderNo} 已创建`;
+        this.feedbackMessage =
+          '\u4e0b\u5355\u6210\u529f\uff0c\u8ba2\u5355 ' + order.orderNo + ' \u5df2\u521b\u5efa';
         return createResult(true, this.feedbackMessage);
-      } catch {
-        this.walletBalance = Number((this.walletBalance - total).toFixed(2));
-        this.points += Math.floor(total / 10);
-
-        const order = createFallbackOrder(items);
-        this.orders.unshift(order);
-        this.activePanel = 'orders';
-        this.selectedProduct = null;
-        this.feedbackMessage = `下单成功，订单 ${order.id} 已创建`;
-        return createResult(true, this.feedbackMessage);
+      } catch (error) {
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '\u4e0b\u5355\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5';
+        return createResult(false, this.feedbackMessage);
       }
     },
 
@@ -536,14 +577,13 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.activePanel = 'wallet';
         this.feedbackMessage =
           result.bonusAmount > 0
-            ? `已充值 ¥${amount.toFixed(2)}，赠送 ¥${result.bonusAmount.toFixed(2)}`
-            : `已充值 ¥${amount.toFixed(2)}`;
+            ? '\u5df2\u5145\u503c \u00a5' + amount.toFixed(2) + '\uff0c\u8d60\u9001 \u00a5' + result.bonusAmount.toFixed(2)
+            : '\u5df2\u5145\u503c \u00a5' + amount.toFixed(2);
         return createResult(true, this.feedbackMessage);
-      } catch {
-        this.walletBalance = Number((this.walletBalance + amount).toFixed(2));
-        this.feedbackMessage = `已充值 ¥${amount.toFixed(2)}`;
-        this.activePanel = 'wallet';
-        return createResult(true, this.feedbackMessage);
+      } catch (error) {
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '\u5145\u503c\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5';
+        return createResult(false, this.feedbackMessage);
       }
     },
 
