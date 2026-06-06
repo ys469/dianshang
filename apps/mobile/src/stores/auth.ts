@@ -1,31 +1,24 @@
 import { defineStore } from 'pinia';
+import {
+  getClientStorageItem,
+  removeClientStorageItem,
+  setClientStorageItem
+} from '../services/client-storage';
 import { authClient, type AuthUser, type SmsScene } from '../services/api';
 
 const TOKEN_KEY = 'smart-member-mobile-token';
 const USER_KEY = 'smart-member-mobile-user';
 
 function getStorageItem(key: string): string {
-  try {
-    return uni.getStorageSync(key) || '';
-  } catch {
-    return '';
-  }
+  return getClientStorageItem(key);
 }
 
 function setStorageItem(key: string, value: string): void {
-  try {
-    uni.setStorageSync(key, value);
-  } catch {
-    // silently ignore storage errors
-  }
+  setClientStorageItem(key, value);
 }
 
 function removeStorageItem(key: string): void {
-  try {
-    uni.removeStorageSync(key);
-  } catch {
-    // silently ignore
-  }
+  removeClientStorageItem(key);
 }
 
 export const useAuthStore = defineStore('auth', {

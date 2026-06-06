@@ -1,3 +1,5 @@
+import { getClientStorageItem } from './client-storage';
+
 export interface HomePayload {
   banners: Array<{ id: string; title: string; image: string }>;
   categories: Array<{ id: string; name: string }>;
@@ -106,11 +108,7 @@ interface ApiResponse<T> {
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:3000';
 
 function getToken(): string {
-  try {
-    return uni.getStorageSync('smart-member-mobile-token') || '';
-  } catch {
-    return '';
-  }
+  return getClientStorageItem('smart-member-mobile-token');
 }
 
 async function parseApiResponse<T>(response: Response): Promise<ApiResponse<T>> {

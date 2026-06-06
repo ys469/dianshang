@@ -129,7 +129,7 @@ onUnmounted(() => {
 });
 
 watch(feedbackMessage, (message, _, onCleanup) => {
-  if (!message) {
+  if (!message || !isAuthenticated.value) {
     return;
   }
 
@@ -141,6 +141,11 @@ watch(feedbackMessage, (message, _, onCleanup) => {
     window.clearTimeout(timer);
   });
 });
+
+function switchAuthView(nextView: AuthView) {
+  authView.value = nextView;
+  mallStore.clearFeedback();
+}
 
 function resolveCategoryId(sectionTitle: string, product: CatalogProduct) {
   const haystack = `${sectionTitle} ${product.name} ${product.tags.join(' ')}`.toLowerCase();
@@ -338,7 +343,7 @@ function startCountdown(scene: 'register' | 'reset_password', seconds = 60) {
 }
 
 async function handleSendCode(scene: 'register' | 'reset_password') {
-  const mobile = scene === 'register' ? registerForm.mobile : resetForm.mobile;
+  const mobile = (scene === 'register' ? registerForm.mobile : resetForm.mobile).trim();
   if (!validateMobile(mobile)) {
     mallStore.setFeedback('请输入正确的手机号');
     return;
@@ -355,9 +360,21 @@ async function handleSendCode(scene: 'register' | 'reset_password') {
 async function handleLogin(role: LoginRole) {
   authMode.value = role;
   const payload = loginForm[role];
+  const account = payload.account.trim();
+
+  if (!account || !payload.password) {
+    mallStore.setFeedback('请输入账号和密码');
+    return;
+  }
+
+  if (payload.password.length < 6) {
+    mallStore.setFeedback('密码至少 6 位');
+    return;
+  }
+
   const result = await mallStore.login({
     role,
-    account: payload.account,
+    account,
     password: payload.password
   });
 
@@ -367,10 +384,35 @@ async function handleLogin(role: LoginRole) {
 }
 
 async function handleRegister() {
+  if (!validateMobile(registerForm.mobile.trim())) {
+    mallStore.setFeedback('请输入正确的手机号');
+    return;
+  }
+
+  if (!registerForm.smsCode.trim()) {
+    mallStore.setFeedback('请输入短信验证码');
+    return;
+  }
+
+  if (registerForm.nickname.trim().length < 2) {
+    mallStore.setFeedback('昵称至少 2 个字');
+    return;
+  }
+
+  if (registerForm.password.length < 6) {
+    mallStore.setFeedback('密码至少 6 位');
+    return;
+  }
+
+  if (registerForm.password !== registerForm.confirmPassword) {
+    mallStore.setFeedback('两次输入的密码不一致');
+    return;
+  }
+
   const result = await mallStore.register({
-    mobile: registerForm.mobile,
-    smsCode: registerForm.smsCode,
-    nickname: registerForm.nickname,
+    mobile: registerForm.mobile.trim(),
+    smsCode: registerForm.smsCode.trim(),
+    nickname: registerForm.nickname.trim(),
     password: registerForm.password,
     confirmPassword: registerForm.confirmPassword
   });
@@ -387,9 +429,29 @@ async function handleRegister() {
 }
 
 async function handleResetPassword() {
+  if (!validateMobile(resetForm.mobile.trim())) {
+    mallStore.setFeedback('请输入正确的手机号');
+    return;
+  }
+
+  if (!resetForm.smsCode.trim()) {
+    mallStore.setFeedback('请输入短信验证码');
+    return;
+  }
+
+  if (resetForm.password.length < 6) {
+    mallStore.setFeedback('新密码至少 6 位');
+    return;
+  }
+
+  if (resetForm.password !== resetForm.confirmPassword) {
+    mallStore.setFeedback('两次输入的新密码不一致');
+    return;
+  }
+
   const result = await mallStore.resetPassword({
-    mobile: resetForm.mobile,
-    smsCode: resetForm.smsCode,
+    mobile: resetForm.mobile.trim(),
+    smsCode: resetForm.smsCode.trim(),
     password: resetForm.password,
     confirmPassword: resetForm.confirmPassword
   });
@@ -436,6 +498,10 @@ function handleLogout(nextRole: LoginRole = 'user') {
                   : '通过短信验证码验证身份后，可为会员账号重置登录密码。'
             }}
           </p>
+        </div>
+
+        <div v-if="feedbackMessage" class="auth-feedback">
+          {{ feedbackMessage }}
         </div>
 
         <div v-if="authView === 'login'" class="auth-tabs">
@@ -485,7 +551,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
             v-if="authMode === 'user'"
             type="button"
             class="inline-link"
-            @click="authView = 'reset'"
+            @click="switchAuthView('reset')"
           >
             忘记密码
           </button>
@@ -602,7 +668,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
             v-if="authView !== 'register'"
             type="button"
             class="ghost-button wide"
-            @click="authView = 'register'"
+            @click="switchAuthView('register')"
           >
             没有账号？注册会员
           </button>
@@ -610,7 +676,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
             v-if="authView !== 'login'"
             type="button"
             class="ghost-button wide"
-            @click="authView = 'login'"
+            @click="switchAuthView('login')"
           >
             已有账号？返回登录
           </button>
@@ -1015,7 +1081,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
       </aside>
 
       <transition name="fade">
-        <div v-if="feedbackMessage" class="toast">{{ feedbackMessage }}</div>
+        <div v-if="feedbackMessage && isAuthenticated" class="toast">{{ feedbackMessage }}</div>
       </transition>
 
       <nav class="tabbar">
@@ -1128,6 +1194,15 @@ p {
 .empty-state p {
   color: #667085;
   font-size: 13px;
+}
+
+.auth-feedback {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(124, 77, 255, 0.1);
+  color: #5b34d0;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .auth-shell h1,

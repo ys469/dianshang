@@ -9,6 +9,7 @@ const {
   getProfileMock,
   loginMock,
   registerMock,
+  sendSmsCodeMock,
   profileState,
   updateProfileMock
 } = vi.hoisted(() => {
@@ -58,6 +59,13 @@ const {
         mobile,
         memberLevel: '普通会员'
       }
+    })),
+    sendSmsCodeMock: vi.fn(async () => ({
+      mobile: '13900000001',
+      scene: 'register' as const,
+      expiresInSeconds: 300,
+      provider: 'mock' as const,
+      debugCode: '123456'
     })),
     getProfileMock: vi.fn(async () => ({ ...state.profile })),
     getOrdersMock: vi.fn(async () => state.orders.map((order) => ({ ...order }))),
@@ -142,7 +150,8 @@ vi.mock('../services/api', async () => {
     authClient: {
       ...actual.authClient,
       login: loginMock,
-      register: registerMock
+      register: registerMock,
+      sendSmsCode: sendSmsCodeMock
     },
     ordersClient: {
       ...actual.ordersClient,
@@ -188,6 +197,7 @@ describe('demo mall store', () => {
     profileState.orders = [];
     loginMock.mockClear();
     registerMock.mockClear();
+    sendSmsCodeMock.mockClear();
     getProfileMock.mockClear();
     getOrdersMock.mockClear();
     updateProfileMock.mockClear();
@@ -347,5 +357,15 @@ describe('demo mall store', () => {
     expect(store.points).toBe(0);
     expect(store.coupons).toBe(0);
     expect(store.orders).toHaveLength(0);
+  });
+
+  it('surfaces the mock verification code when real SMS delivery is not configured', async () => {
+    const store = useDemoMallStore();
+
+    const result = await store.sendSmsCode('13900000001', 'register');
+
+    expect(result.success).toBe(true);
+    expect(sendSmsCodeMock).toHaveBeenCalledWith('13900000001', 'register');
+    expect(store.feedbackMessage).toContain('123456');
   });
 });

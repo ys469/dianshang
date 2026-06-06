@@ -7,6 +7,7 @@ import {
   type MemberProfile,
   type OrderPayload
 } from '../services/api';
+import { removeClientStorageItem, setClientStorageItem } from '../services/client-storage';
 
 export type DemoProduct = HomePayload['sections'][number]['products'][number];
 
@@ -153,19 +154,11 @@ function createResult(success: boolean, message: string) {
 }
 
 function setStorageItem(key: string, value: string) {
-  try {
-    uni.setStorageSync(key, value);
-  } catch {
-    // ignore storage errors in browser preview
-  }
+  setClientStorageItem(key, value);
 }
 
 function removeStorageItem(key: string) {
-  try {
-    uni.removeStorageSync(key);
-  } catch {
-    // ignore storage errors in browser preview
-  }
+  removeClientStorageItem(key);
 }
 
 function mapApiOrderToDemoOrder(order: OrderPayload, items: CartItem[] = []): DemoOrder {
@@ -340,8 +333,11 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
     async sendSmsCode(mobile: string, scene: 'register' | 'reset_password') {
       try {
-        await authClient.sendSmsCode(mobile, scene);
-        this.feedbackMessage = '\u9a8c\u8bc1\u7801\u5df2\u53d1\u9001\uff0c\u8bf7\u6ce8\u610f\u67e5\u6536\u77ed\u4fe1';
+        const result = await authClient.sendSmsCode(mobile, scene);
+        this.feedbackMessage =
+          result.provider === 'mock' && result.debugCode
+            ? `短信通道尚未配置真实发送，当前验证码：${result.debugCode}`
+            : '\u9a8c\u8bc1\u7801\u5df2\u53d1\u9001\uff0c\u8bf7\u6ce8\u610f\u67e5\u6536\u77ed\u4fe1';
         return {
           success: true,
           message: this.feedbackMessage
