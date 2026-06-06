@@ -1,15 +1,53 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, ref } from 'vue';
+import { memberClient, type MemberProfile } from '../../services/api';
 import { useAuthStore } from '../../stores/auth';
 
 const authStore = useAuthStore();
+const loading = ref(false);
+const profile = ref<MemberProfile | null>(null);
 
 const memberAssets = computed(() => [
-  { label: '余额', value: '¥120' },
-  { label: '积分', value: '580' },
-  { label: '优惠券', value: '4' },
-  { label: '累计订单', value: '32' }
+  {
+    label: '余额',
+    value: `¥${(profile.value?.balance ?? 0).toFixed(2)}`
+  },
+  {
+    label: '积分',
+    value: `${profile.value?.points ?? 0}`
+  },
+  {
+    label: '优惠券',
+    value: `${profile.value?.coupons ?? 0}`
+  },
+  {
+    label: '累计订单',
+    value: `${profile.value?.totalOrders ?? 0}`
+  }
 ]);
+
+const growthValueText = computed(() => `${profile.value?.growthValue ?? 0}`);
+const addressSummary = computed(() => profile.value?.defaultAddress || '暂未设置收货地址');
+
+async function loadProfile() {
+  if (!authStore.isAuthenticated) {
+    profile.value = null;
+    return;
+  }
+
+  loading.value = true;
+  try {
+    profile.value = await memberClient.getProfile();
+  } catch {
+    profile.value = null;
+    uni.showToast({
+      title: '会员资料加载失败',
+      icon: 'none'
+    });
+  } finally {
+    loading.value = false;
+  }
+}
 
 function goToLogin() {
   uni.navigateTo({ url: '/pages/login/index' });
@@ -18,10 +56,11 @@ function goToLogin() {
 function handleLogout() {
   uni.showModal({
     title: '退出登录',
-    content: '确定要退出登录吗？',
+    content: '确定要退出当前账号吗？',
     success: (res) => {
       if (res.confirm) {
         authStore.logout();
+        profile.value = null;
       }
     }
   });
@@ -30,23 +69,25 @@ function handleLogout() {
 function showTip(name: string) {
   uni.showToast({ title: `「${name}」即将开放`, icon: 'none' });
 }
+
+onMounted(() => {
+  void loadProfile();
+});
 </script>
 
 <template>
   <view class="page">
-    <!-- User Card -->
     <view class="profile-card" @tap="authStore.isAuthenticated ? null : goToLogin()">
       <view class="avatar">{{ authStore.displayName.charAt(0) }}</view>
       <view class="profile-info">
         <text class="name">{{ authStore.displayName }}</text>
-        <text class="level">{{ authStore.memberLevel }} · 成长值 960</text>
+        <text class="level">{{ authStore.memberLevel }} · 成长值 {{ growthValueText }}</text>
       </view>
       <view v-if="authStore.isAuthenticated" class="logout-link" @tap.stop="handleLogout">
         <text class="logout-text">退出</text>
       </view>
     </view>
 
-    <!-- Assets -->
     <view class="asset-grid">
       <view v-for="asset in memberAssets" :key="asset.label" class="asset-card">
         <text class="asset-label">{{ asset.label }}</text>
@@ -54,7 +95,16 @@ function showTip(name: string) {
       </view>
     </view>
 
-    <!-- Menu -->
+    <view class="address-card">
+      <text class="section-title">默认收货地址</text>
+      <text class="address-text">{{ addressSummary }}</text>
+      <text v-if="profile?.contactMobile" class="address-mobile">{{ profile.contactMobile }}</text>
+    </view>
+
+    <view v-if="loading" class="status-card">
+      <text class="status-text">正在同步会员资料...</text>
+    </view>
+
     <view class="menu-panel">
       <view class="menu-item" @tap="showTip('我的订单')">我的订单</view>
       <view class="menu-item" @tap="showTip('收货地址')">收货地址</view>
@@ -75,7 +125,9 @@ function showTip(name: string) {
 
 .profile-card,
 .asset-card,
-.menu-panel {
+.menu-panel,
+.address-card,
+.status-card {
   background: #ffffff;
   border-radius: 16rpx;
 }
@@ -111,7 +163,10 @@ function showTip(name: string) {
   font-weight: 600;
 }
 
-.level {
+.level,
+.address-text,
+.address-mobile,
+.status-text {
   font-size: 24rpx;
   color: #64748b;
 }
@@ -138,7 +193,8 @@ function showTip(name: string) {
   padding: 22rpx;
 }
 
-.asset-label {
+.asset-label,
+.section-title {
   font-size: 24rpx;
   color: #64748b;
 }
@@ -147,6 +203,14 @@ function showTip(name: string) {
   font-size: 32rpx;
   font-weight: 600;
   color: #1f2937;
+}
+
+.address-card,
+.status-card {
+  display: grid;
+  gap: 12rpx;
+  padding: 24rpx;
+  margin-bottom: 20rpx;
 }
 
 .menu-panel {

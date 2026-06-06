@@ -8,6 +8,7 @@ const {
   getOrdersMock,
   getProfileMock,
   loginMock,
+  registerMock,
   profileState,
   updateProfileMock
 } = vi.hoisted(() => {
@@ -46,6 +47,16 @@ const {
         nickname: role === 'admin' ? '运营管理员' : 'Formal Member',
         mobile: role === 'user' ? account : '',
         memberLevel: role === 'user' ? 'Gold' : 'Admin'
+      }
+    })),
+    registerMock: vi.fn(async (mobile: string, nickname: string) => ({
+      token: 'register-token',
+      user: {
+        id: 'user-new',
+        role: 'user' as const,
+        nickname,
+        mobile,
+        memberLevel: '普通会员'
       }
     })),
     getProfileMock: vi.fn(async () => ({ ...state.profile })),
@@ -130,7 +141,8 @@ vi.mock('../services/api', async () => {
     ...actual,
     authClient: {
       ...actual.authClient,
-      login: loginMock
+      login: loginMock,
+      register: registerMock
     },
     ordersClient: {
       ...actual.ordersClient,
@@ -175,6 +187,7 @@ describe('demo mall store', () => {
     };
     profileState.orders = [];
     loginMock.mockClear();
+    registerMock.mockClear();
     getProfileMock.mockClear();
     getOrdersMock.mockClear();
     updateProfileMock.mockClear();
@@ -293,5 +306,46 @@ describe('demo mall store', () => {
     expect(store.currentRole).toBe('admin');
     expect(store.currentUserName).toBe('运营管理员');
     expect(store.activeAdminShortcut).toBe('products');
+  });
+
+  it('clears previous member assets before syncing a newly registered account', async () => {
+    const store = useDemoMallStore();
+
+    store.isAuthenticated = true;
+    store.currentRole = 'user';
+    store.currentUserName = 'Old Member';
+    store.currentUserMobile = '13800138000';
+    store.walletBalance = 520;
+    store.points = 580;
+    store.coupons = 4;
+    store.orders = [
+      {
+        id: 'SM998',
+        createdAt: '2026-06-06 08:00:00',
+        itemCount: 1,
+        total: 49.9,
+        status: '待发货',
+        items: []
+      }
+    ];
+
+    getProfileMock.mockRejectedValueOnce(new Error('profile unavailable'));
+    getOrdersMock.mockRejectedValueOnce(new Error('orders unavailable'));
+
+    const result = await store.register({
+      mobile: '13900000009',
+      smsCode: '123456',
+      nickname: 'New Member',
+      password: 'test123456',
+      confirmPassword: 'test123456'
+    });
+
+    expect(result.success).toBe(true);
+    expect(store.currentUserName).toBe('New Member');
+    expect(store.currentUserMobile).toBe('13900000009');
+    expect(store.walletBalance).toBe(0);
+    expect(store.points).toBe(0);
+    expect(store.coupons).toBe(0);
+    expect(store.orders).toHaveLength(0);
   });
 });

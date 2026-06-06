@@ -30,4 +30,12 @@ describe('production-facing copy', () => {
     expect(source).not.toContain('会员测试账号');
     expect(source).not.toContain('开发验证码');
   });
+  it('does not hardcode member asset values in the uni-app profile page', () => {
+    const source = readFileSync(resolve(mobileRoot, 'src/pages/profile/index.vue'), 'utf8');
+
+    expect(source).not.toContain('¥120');
+    expect(source).not.toContain("'580'");
+    expect(source).not.toContain("'4'");
+    expect(source).not.toContain('960');
+  });
 });

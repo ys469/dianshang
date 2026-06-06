@@ -179,6 +179,15 @@ function mapApiOrderToDemoOrder(order: OrderPayload, items: CartItem[] = []): De
   };
 }
 
+function createEmptyMemberState() {
+  return {
+    walletBalance: INITIAL_WALLET_BALANCE,
+    points: INITIAL_POINTS,
+    coupons: INITIAL_COUPONS,
+    orders: [] as DemoOrder[]
+  };
+}
+
 export const useDemoMallStore = defineStore('demo-mall', {
   state: () => ({
     isAuthenticated: false,
@@ -220,6 +229,15 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.defaultConsignee = profile.defaultConsignee || profile.nickname;
       this.contactMobile = profile.contactMobile || profile.mobile;
       this.defaultAddress = profile.defaultAddress || this.defaultAddress;
+    },
+
+    resetMemberSessionData() {
+      const emptyState = createEmptyMemberState();
+      this.walletBalance = emptyState.walletBalance;
+      this.points = emptyState.points;
+      this.coupons = emptyState.coupons;
+      this.orders = emptyState.orders;
+      this.dailyCheckInClaimed = false;
     },
 
     async syncMemberData() {
@@ -292,6 +310,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.defaultConsignee = result.user.nickname;
         this.contactMobile = result.user.mobile ?? payload.mobile;
         this.activeAdminShortcut = null;
+        this.resetMemberSessionData();
         setStorageItem(TOKEN_KEY, result.token);
         setStorageItem(USER_KEY, JSON.stringify(result.user));
         await this.syncMemberData().catch(() => undefined);
