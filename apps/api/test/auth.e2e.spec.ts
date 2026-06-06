@@ -38,33 +38,12 @@ describe('/auth', () => {
     }
   });
 
-  it('sends a registration sms code and only registers when the code is valid', async () => {
-    const sendCodeResponse = await request(app.getHttpServer()).post('/auth/send-sms-code').send({
-      mobile: '13900000001',
-      scene: 'register'
-    });
-
-    expect(sendCodeResponse.status).toBe(200);
-    expect(sendCodeResponse.body.data.mobile).toBe('13900000001');
-    expect(sendCodeResponse.body.data.scene).toBe('register');
-    expect(sendCodeResponse.body.data.debugCode).toBeTruthy();
-
-    const invalidRegister = await request(app.getHttpServer()).post('/auth/register').send({
-      mobile: '13900000001',
-      nickname: '测试会员',
-      password: 'member-pass-123',
-      confirmPassword: 'member-pass-123',
-      smsCode: '000000'
-    });
-
-    expect(invalidRegister.status).toBe(400);
-
+  it('registers a member without requiring an sms code', async () => {
     const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
       mobile: '13900000001',
       nickname: '测试会员',
       password: 'member-pass-123',
-      confirmPassword: 'member-pass-123',
-      smsCode: sendCodeResponse.body.data.debugCode
+      confirmPassword: 'member-pass-123'
     });
 
     expect(registerResponse.status).toBe(201);
@@ -83,19 +62,11 @@ describe('/auth', () => {
   });
 
   it('rejects registration when password confirmation does not match', async () => {
-    const sendCodeResponse = await request(app.getHttpServer()).post('/auth/send-sms-code').send({
-      mobile: '13900000009',
-      scene: 'register'
-    });
-
-    expect(sendCodeResponse.status).toBe(200);
-
     const response = await request(app.getHttpServer()).post('/auth/register').send({
       mobile: '13900000009',
       nickname: '确认失败会员',
       password: 'member-pass-123',
-      confirmPassword: 'different-pass-456',
-      smsCode: sendCodeResponse.body.data.debugCode
+      confirmPassword: 'different-pass-456'
     });
 
     expect(response.status).toBe(400);
@@ -103,21 +74,11 @@ describe('/auth', () => {
   });
 
   it('resets a member password only when the reset sms code is valid', async () => {
-    const registerCodeResponse = await request(app.getHttpServer())
-      .post('/auth/send-sms-code')
-      .send({
-        mobile: '13900000002',
-        scene: 'register'
-      });
-
-    expect(registerCodeResponse.status).toBe(200);
-
     const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
       mobile: '13900000002',
       nickname: '重置会员',
       password: 'before-reset-123',
-      confirmPassword: 'before-reset-123',
-      smsCode: registerCodeResponse.body.data.debugCode
+      confirmPassword: 'before-reset-123'
     });
 
     expect(registerResponse.status).toBe(201);

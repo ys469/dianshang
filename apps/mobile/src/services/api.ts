@@ -55,6 +55,11 @@ export interface OrderPayload {
   id: string;
   orderNo: string;
   status: string;
+  paymentMethod: 'balance' | 'wechat';
+  paymentState: 'pending' | 'success' | 'failed' | 'closed';
+  paymentChannel: 'balance' | 'native' | 'h5' | null;
+  transactionId: string | null;
+  paidAt: string | null;
   fulfillmentMode: string;
   payableAmount: number;
   totalAmount: number;
@@ -62,6 +67,9 @@ export interface OrderPayload {
   customerMobile: string;
   address: string;
   createdAt: string;
+  cancelDeadlineAt: string;
+  cancelledAt: string | null;
+  canCancel: boolean;
   itemCount: number;
   itemSummary: string;
   items: Array<{
@@ -232,12 +240,11 @@ export const authClient = {
     mobile: string,
     nickname: string,
     password: string,
-    confirmPassword: string,
-    smsCode: string
+    confirmPassword: string
   ): Promise<AuthPayload> {
     return fetchJson<AuthPayload>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ mobile, nickname, password, confirmPassword, smsCode })
+      body: JSON.stringify({ mobile, nickname, password, confirmPassword })
     });
   },
 
@@ -264,6 +271,7 @@ export const authClient = {
 export const ordersClient = {
   async create(payload: {
     fulfillmentMode: 'delivery' | 'pickup';
+    paymentMethod?: 'balance' | 'wechat';
     consignee: string;
     mobile: string;
     address: string;
@@ -278,6 +286,12 @@ export const ordersClient = {
   async list() {
     return fetchJson<OrderPayload[]>('/orders', {
       method: 'GET'
+    });
+  },
+
+  async cancel(orderNo: string) {
+    return fetchJson<OrderPayload>(`/orders/${orderNo}/cancel`, {
+      method: 'POST'
     });
   }
 };

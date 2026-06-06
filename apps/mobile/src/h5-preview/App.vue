@@ -64,7 +64,6 @@ const loginForm = reactive({
 
 const registerForm = reactive({
   mobile: '',
-  smsCode: '',
   nickname: '',
   password: '',
   confirmPassword: ''
@@ -93,6 +92,7 @@ const {
   contactMobile,
   coupons,
   currentUserName,
+  currentUserMobile,
   defaultConsignee,
   defaultAddress,
   feedbackMessage,
@@ -115,8 +115,35 @@ const addressForm = reactive({
   defaultAddress: ''
 });
 
+const nowTick = ref(Date.now());
+let orderClock: ReturnType<typeof setInterval> | null = null;
+
+const confirmDialog = reactive({
+  open: false,
+  source: 'buy_now' as 'buy_now' | 'cart',
+  items: [] as Array<CatalogProduct & { quantity: number }>,
+  paymentMethod: 'balance' as 'balance' | 'wechat'
+});
+
+const confirmItemCount = computed(() =>
+  confirmDialog.items.reduce((sum, item) => sum + item.quantity, 0)
+);
+
+const confirmTotal = computed(() =>
+  confirmDialog.items.reduce((sum, item) => sum + item.memberPrice * item.quantity, 0)
+);
+
+const confirmedAddressSummary = computed(() => ({
+  consignee: defaultConsignee.value || currentUserName.value || '未填写收货人',
+  mobile: contactMobile.value || currentUserMobile.value || '未填写联系电话',
+  address: defaultAddress.value || '未填写收货地址'
+}));
+
 onMounted(() => {
   void homeStore.fetchHome();
+  orderClock = window.setInterval(() => {
+    nowTick.value = Date.now();
+  }, 1000);
 });
 
 onUnmounted(() => {
@@ -125,6 +152,9 @@ onUnmounted(() => {
   }
   if (resetTimer) {
     window.clearInterval(resetTimer);
+  }
+  if (orderClock) {
+    window.clearInterval(orderClock);
   }
 });
 
@@ -266,17 +296,62 @@ function handleAddToCart(product: CatalogProduct) {
   mallStore.addToCart(product);
 }
 
-async function handleBuyNow(product: CatalogProduct) {
-  const result = await mallStore.buyNow(product);
-  if (result.success) {
-    await homeStore.fetchHome();
-    activeTab.value = 'profile';
+function openCheckoutConfirm(
+  items: Array<CatalogProduct & { quantity: number }>,
+  source: 'buy_now' | 'cart'
+) {
+  if (!items.length) {
+    mallStore.setFeedback('请先选择要购买的商品');
+    return;
   }
+
+  const deliveryConsignee = defaultConsignee.value.trim() || currentUserName.value.trim();
+  const deliveryMobile = contactMobile.value.trim() || currentUserMobile.value.trim();
+  const deliveryAddress = defaultAddress.value.trim();
+
+  if (!deliveryConsignee || !validateMobile(deliveryMobile) || !deliveryAddress) {
+    addressForm.defaultConsignee = defaultConsignee.value;
+    addressForm.contactMobile = contactMobile.value || currentUserMobile.value;
+    addressForm.defaultAddress = defaultAddress.value;
+    mallStore.setFeedback('请先确认收货人、联系电话和收货地址');
+    mallStore.openPanel('address');
+    return;
+  }
+
+  confirmDialog.source = source;
+  confirmDialog.items = items.map((item) => ({ ...item }));
+  confirmDialog.paymentMethod = 'balance';
+  confirmDialog.open = true;
 }
 
-async function handleCheckout() {
-  const result = await mallStore.checkout();
+function handleBuyNow(product: CatalogProduct) {
+  openCheckoutConfirm([{ ...product, quantity: 1 }], 'buy_now');
+}
+
+function handleCheckout() {
+  if (!cart.value.length) {
+    mallStore.setFeedback('购物车还是空的，先挑点喜欢的商品吧');
+    return;
+  }
+
+  openCheckoutConfirm(cart.value.map((item) => ({ ...item })), 'cart');
+}
+
+function handleEditAddressFromConfirm() {
+  confirmDialog.open = false;
+  addressForm.defaultConsignee = defaultConsignee.value;
+  addressForm.contactMobile = contactMobile.value;
+  addressForm.defaultAddress = defaultAddress.value;
+  mallStore.openPanel('address');
+}
+
+async function handleConfirmCheckout() {
+  const result = await mallStore.submitOrder(confirmDialog.items, confirmDialog.paymentMethod);
   if (result.success) {
+    if (confirmDialog.source === 'cart') {
+      mallStore.cart = [];
+    }
+    confirmDialog.open = false;
     await homeStore.fetchHome();
     activeTab.value = 'profile';
   }
@@ -302,6 +377,24 @@ async function handleSaveAddress() {
     addressForm.defaultConsignee = defaultConsignee.value;
     addressForm.contactMobile = contactMobile.value;
     addressForm.defaultAddress = defaultAddress.value;
+  }
+}
+
+function canCancelOrder(order: { canCancel: boolean; cancelDeadlineAt: string }) {
+  return order.canCancel && new Date(order.cancelDeadlineAt).getTime() > nowTick.value;
+}
+
+function getCancelCountdown(order: { cancelDeadlineAt: string }) {
+  const remaining = Math.max(0, new Date(order.cancelDeadlineAt).getTime() - nowTick.value);
+  const minutes = String(Math.floor(remaining / 60000)).padStart(2, '0');
+  const seconds = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
+
+async function handleCancelOrder(orderNo: string) {
+  const result = await mallStore.cancelOrder(orderNo);
+  if (result.success) {
+    await homeStore.fetchHome();
   }
 }
 
@@ -389,11 +482,6 @@ async function handleRegister() {
     return;
   }
 
-  if (!registerForm.smsCode.trim()) {
-    mallStore.setFeedback('请输入短信验证码');
-    return;
-  }
-
   if (registerForm.nickname.trim().length < 2) {
     mallStore.setFeedback('昵称至少 2 个字');
     return;
@@ -411,7 +499,6 @@ async function handleRegister() {
 
   const result = await mallStore.register({
     mobile: registerForm.mobile.trim(),
-    smsCode: registerForm.smsCode.trim(),
     nickname: registerForm.nickname.trim(),
     password: registerForm.password,
     confirmPassword: registerForm.confirmPassword
@@ -420,7 +507,6 @@ async function handleRegister() {
   if (result.success) {
     authView.value = 'login';
     registerForm.mobile = '';
-    registerForm.smsCode = '';
     registerForm.nickname = '';
     registerForm.password = '';
     registerForm.confirmPassword = '';
@@ -565,25 +651,6 @@ function handleLogout(nextRole: LoginRole = 'user') {
               maxlength="11"
               @input="registerForm.mobile = ($event.target as HTMLInputElement).value"
             />
-          </label>
-          <label class="field">
-            <span>短信验证码</span>
-            <div class="code-row">
-              <input
-                :value="registerForm.smsCode"
-                type="text"
-                maxlength="6"
-                @input="registerForm.smsCode = ($event.target as HTMLInputElement).value"
-              />
-              <button
-                type="button"
-                class="auth-tab"
-                :disabled="registerCountdown > 0"
-                @click="handleSendCode('register')"
-              >
-                {{ registerCountdown > 0 ? `${registerCountdown}s` : '发送验证码' }}
-              </button>
-            </div>
           </label>
           <label class="field">
             <span>昵称</span>
@@ -985,12 +1052,26 @@ function handleLogout(nextRole: LoginRole = 'user') {
             <div v-if="orders.length" class="order-list">
               <article v-for="order in orders" :key="order.id" class="order-card">
                 <div class="section-head compact">
-                  <strong>{{ order.id }}</strong>
+                  <strong>{{ order.orderNo }}</strong>
                   <span>{{ order.status }}</span>
                 </div>
                 <p class="muted-text">{{ order.createdAt }}</p>
                 <p class="muted-text">共 {{ order.itemCount }} 件商品</p>
+                <p class="muted-text">收货地址：{{ order.address || '请先完善收货地址' }}</p>
                 <p class="summary-total small">¥{{ order.total.toFixed(2) }}</p>
+                <div class="order-actions">
+                  <span v-if="canCancelOrder(order)" class="countdown-chip">
+                    可撤回 {{ getCancelCountdown(order) }}
+                  </span>
+                  <button
+                    v-if="canCancelOrder(order)"
+                    type="button"
+                    class="ghost-button"
+                    @click="handleCancelOrder(order.orderNo)"
+                  >
+                    撤回订单
+                  </button>
+                </div>
               </article>
             </div>
             <div v-else class="empty-state compact">
@@ -1076,6 +1157,44 @@ function handleLogout(nextRole: LoginRole = 'user') {
             >
               发起会话
             </button>
+          </div>
+        </section>
+      </aside>
+
+      <aside v-if="confirmDialog.open" class="panel-overlay" @click.self="confirmDialog.open = false">
+        <section class="detail-panel confirm-panel">
+          <div class="panel-header">
+            <h2>确认下单</h2>
+            <button type="button" class="close-button" @click="confirmDialog.open = false">关闭</button>
+          </div>
+
+          <div class="panel-content">
+            <article class="info-card">
+              <strong>商品信息</strong>
+              <p>共 {{ confirmItemCount }} 件商品，合计 ¥{{ confirmTotal.toFixed(2) }}</p>
+            </article>
+
+            <div class="order-preview-list">
+              <article v-for="item in confirmDialog.items" :key="item.id" class="info-card compact-card">
+                <strong>{{ item.name }}</strong>
+                <p>{{ item.quantity }} 件，会员价 ¥{{ item.memberPrice }}</p>
+              </article>
+            </div>
+
+            <article class="info-card">
+              <strong>请确认收货地址是否正确</strong>
+              <p>{{ confirmedAddressSummary.consignee }} / {{ confirmedAddressSummary.mobile }}</p>
+              <p>{{ confirmedAddressSummary.address }}</p>
+            </article>
+
+            <div class="panel-actions confirm-actions">
+              <button type="button" class="ghost-button" @click="handleEditAddressFromConfirm">
+                修改地址
+              </button>
+              <button type="button" class="member-button action-button" @click="handleConfirmCheckout">
+                确认提交订单
+              </button>
+            </div>
           </div>
         </section>
       </aside>
@@ -1770,6 +1889,29 @@ p {
 .info-card {
   display: grid;
   gap: 8px;
+}
+
+.compact-card {
+  padding: 12px;
+}
+
+.order-preview-list,
+.order-actions,
+.confirm-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.countdown-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(124, 77, 255, 0.1);
+  color: #6a3ef0;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .toast {

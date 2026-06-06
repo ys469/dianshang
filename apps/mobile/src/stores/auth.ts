@@ -51,15 +51,13 @@ export const useAuthStore = defineStore('auth', {
       mobile: string,
       nickname: string,
       password: string,
-      confirmPassword: string,
-      smsCode: string
+      confirmPassword: string
     ) {
       const result = await authClient.register(
         mobile,
         nickname,
         password,
-        confirmPassword,
-        smsCode
+        confirmPassword
       );
       this.setSession(result.token, result.user);
       return result;

@@ -23,10 +23,20 @@ export interface CartItem extends CatalogProduct {
 
 export interface DemoOrder {
   id: string;
+  orderNo: string;
   createdAt: string;
   itemCount: number;
   total: number;
-  status: '待发货' | '已完成';
+  status: string;
+  customerName: string;
+  customerMobile: string;
+  address: string;
+  paymentMethod: 'balance' | 'wechat';
+  paymentState: 'pending' | 'success' | 'failed' | 'closed';
+  paymentChannel: 'balance' | 'native' | 'h5' | null;
+  canCancel: boolean;
+  cancelDeadlineAt: string;
+  cancelledAt: string | null;
   items: CartItem[];
 }
 
@@ -74,7 +84,6 @@ export interface RegisterPayload {
   nickname: string;
   password: string;
   confirmPassword: string;
-  smsCode: string;
 }
 
 export interface ResetPasswordPayload {
@@ -138,13 +147,24 @@ function calculateTotal(items: Array<{ memberPrice: number; quantity: number }>)
 
 function createFallbackOrder(items: CartItem[]): DemoOrder {
   const timestamp = Date.now();
+  const createdAt = new Date(timestamp).toISOString();
 
   return {
     id: `SO-${timestamp}`,
-    createdAt: new Date(timestamp).toLocaleString('zh-CN', { hour12: false }),
+    orderNo: `SO-${timestamp}`,
+    createdAt,
     itemCount: items.reduce((sum, item) => sum + item.quantity, 0),
     total: calculateTotal(items),
-    status: '待发货',
+    status: '\u5f85\u53d1\u8d27',
+    customerName: '',
+    customerMobile: '',
+    address: '',
+    paymentMethod: 'balance',
+    paymentState: 'success',
+    paymentChannel: 'balance',
+    canCancel: true,
+    cancelDeadlineAt: new Date(timestamp + 3 * 60 * 1000).toISOString(),
+    cancelledAt: null,
     items
   };
 }
@@ -164,10 +184,20 @@ function removeStorageItem(key: string) {
 function mapApiOrderToDemoOrder(order: OrderPayload, items: CartItem[] = []): DemoOrder {
   return {
     id: order.orderNo,
+    orderNo: order.orderNo,
     createdAt: order.createdAt,
     itemCount: order.itemCount,
     total: order.payableAmount,
-    status: order.status.includes('完成') ? '已完成' : '待发货',
+    status: order.status,
+    customerName: order.customerName,
+    customerMobile: order.customerMobile,
+    address: order.address,
+    paymentMethod: order.paymentMethod,
+    paymentState: order.paymentState,
+    paymentChannel: order.paymentChannel,
+    canCancel: order.canCancel,
+    cancelDeadlineAt: order.cancelDeadlineAt,
+    cancelledAt: order.cancelledAt,
     items
   };
 }
@@ -203,7 +233,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
     unreadMessages: 2,
     defaultConsignee: '',
     contactMobile: '',
-    defaultAddress: '上海市浦东新区张江路 88 号 星选生活馆',
+    defaultAddress: '',
     supportReply: '在线客服通常会在 5 分钟内响应。'
   }),
   getters: {
@@ -221,7 +251,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.coupons = profile.coupons;
       this.defaultConsignee = profile.defaultConsignee || profile.nickname;
       this.contactMobile = profile.contactMobile || profile.mobile;
-      this.defaultAddress = profile.defaultAddress || this.defaultAddress;
+      this.defaultAddress = profile.defaultAddress || '';
     },
 
     resetMemberSessionData() {
@@ -230,6 +260,10 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.points = emptyState.points;
       this.coupons = emptyState.coupons;
       this.orders = emptyState.orders;
+      this.defaultAddress = '';
+      this.cart = [];
+      this.activePanel = null;
+      this.selectedProduct = null;
       this.dailyCheckInClaimed = false;
     },
 
@@ -292,8 +326,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
           payload.mobile,
           payload.nickname,
           payload.password,
-          payload.confirmPassword,
-          payload.smsCode
+          payload.confirmPassword
         );
 
         this.isAuthenticated = true;
@@ -493,24 +526,27 @@ export const useDemoMallStore = defineStore('demo-mall', {
       return createResult(true, this.feedbackMessage);
     },
 
-    async checkout() {
+    async checkout(paymentMethod: 'balance' | 'wechat' = 'balance') {
       if (!this.cart.length) {
-        return createResult(false, '购物车还是空的，先挑点喜欢的商品吧');
+        return createResult(false, '\u8d2d\u7269\u8f66\u8fd8\u662f\u7a7a\u7684\uff0c\u5148\u6311\u70b9\u559c\u6b22\u7684\u5546\u54c1\u5427');
       }
 
       const items = this.cart.map((item) => ({ ...item }));
-      const result = await this.checkoutItems(items);
+      const result = await this.submitOrder(items, paymentMethod);
       if (result.success) {
         this.cart = [];
       }
       return result;
     },
 
-    async buyNow(product: CatalogProduct) {
-      return this.checkoutItems([{ ...product, quantity: 1 }]);
+    async buyNow(product: CatalogProduct, paymentMethod: 'balance' | 'wechat' = 'balance') {
+      return this.submitOrder([{ ...product, quantity: 1 }], paymentMethod);
     },
 
-    async checkoutItems(items: CartItem[]) {
+    async submitOrder(
+      items: CartItem[],
+      paymentMethod: 'balance' | 'wechat' = 'balance'
+    ) {
       const total = calculateTotal(items);
       const consignee = this.defaultConsignee.trim() || this.currentUserName.trim();
       const contactMobile = this.contactMobile.trim() || this.currentUserMobile.trim();
@@ -521,7 +557,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
           '\u8bf7\u5148\u5b8c\u5584\u6536\u8d27\u4eba\u3001\u8054\u7cfb\u7535\u8bdd\u548c\u6536\u8d27\u5730\u5740';
         return createResult(false, this.feedbackMessage);
       }
-      if (this.walletBalance < total) {
+      if (paymentMethod === 'balance' && this.walletBalance < total) {
         this.feedbackMessage = '\u4f59\u989d\u4e0d\u8db3\uff0c\u8bf7\u5148\u5145\u503c\u540e\u518d\u63d0\u4ea4\u8ba2\u5355';
         return createResult(false, this.feedbackMessage);
       }
@@ -529,6 +565,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
       try {
         const order = await ordersClient.create({
           fulfillmentMode: 'delivery',
+          paymentMethod,
           consignee,
           mobile: contactMobile,
           address: defaultAddress,
@@ -545,7 +582,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
         if (profile) {
           this.applyMemberProfile(profile);
-        } else {
+        } else if (paymentMethod === 'balance') {
           this.walletBalance = Number((this.walletBalance - total).toFixed(2));
           this.points += Math.floor(total / 10);
         }
@@ -564,6 +601,41 @@ export const useDemoMallStore = defineStore('demo-mall', {
       } catch (error) {
         this.feedbackMessage =
           error instanceof Error ? error.message : '\u4e0b\u5355\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5';
+        return createResult(false, this.feedbackMessage);
+      }
+    },
+
+    async cancelOrder(orderNo: string) {
+      try {
+        const order = await ordersClient.cancel(orderNo);
+        const [profile, apiOrders] = await Promise.all([
+          memberClient.getProfile().catch(() => null),
+          memberClient.getOrders().catch(() => null)
+        ]);
+
+        if (profile) {
+          this.applyMemberProfile(profile);
+        }
+
+        if (apiOrders) {
+          this.orders = apiOrders.map((entry) => mapApiOrderToDemoOrder(entry));
+        } else {
+          const mappedOrder = mapApiOrderToDemoOrder(order);
+          const existingIndex = this.orders.findIndex(
+            (entry) => entry.orderNo === orderNo || entry.id === orderNo
+          );
+          if (existingIndex >= 0) {
+            this.orders.splice(existingIndex, 1, mappedOrder);
+          } else {
+            this.orders.unshift(mappedOrder);
+          }
+        }
+
+        this.feedbackMessage = '\u8ba2\u5355\u5df2\u64a4\u56de';
+        return createResult(true, this.feedbackMessage);
+      } catch (error) {
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '\u64a4\u56de\u8ba2\u5355\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5';
         return createResult(false, this.feedbackMessage);
       }
     },

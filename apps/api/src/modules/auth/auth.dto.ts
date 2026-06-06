@@ -30,10 +30,6 @@ export class RegisterDto {
   @IsString()
   @MinLength(6)
   confirmPassword!: string;
-
-  @IsString()
-  @Length(6, 6)
-  smsCode!: string;
 }
 
 export class ResetPasswordDto {

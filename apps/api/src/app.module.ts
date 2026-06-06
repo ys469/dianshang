@@ -8,6 +8,7 @@ import { MarketingModule } from './modules/marketing/marketing.module';
 import { MemberModule } from './modules/member/member.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { PaymentsModule } from './modules/payments/payments.module';
 import { ProductsModule } from './modules/products/products.module';
 import { RuntimeDataModule } from './modules/runtime-data/runtime-data.module';
 import { JwtAuthGuard } from './common/jwt-auth.guard';
@@ -24,6 +25,7 @@ import { JwtAuthGuard } from './common/jwt-auth.guard';
     HomeModule,
     ProductsModule,
     OrdersModule,
+    PaymentsModule,
     AdminModule,
     MarketingModule,
     FinanceModule,

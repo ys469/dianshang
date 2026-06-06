@@ -63,8 +63,6 @@ export class AuthService {
       throw new ConflictException('该手机号已注册');
     }
 
-    await this.assertValidSmsCode(dto.mobile, 'register', dto.smsCode);
-
     const user = this.authDbService.createUser({
       role: 'user',
       account: dto.mobile,

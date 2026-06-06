@@ -13,6 +13,10 @@ import {
 } from '../../data/demo-data';
 
 type FinanceRange = 'today' | 'week' | 'month';
+type PaymentMethod = 'balance' | 'wechat';
+type PaymentChannel = 'balance' | 'native' | 'h5';
+type PaymentState = 'pending' | 'success' | 'failed' | 'closed';
+const ORDER_CANCEL_WINDOW_MS = 3 * 60 * 1000;
 
 interface ProductRecord {
   id: string;
@@ -41,6 +45,11 @@ interface OrderRecord {
   id: string;
   orderNo: string;
   status: string;
+  paymentMethod: PaymentMethod;
+  paymentState: PaymentState;
+  paymentChannel: PaymentChannel | null;
+  transactionId: string | null;
+  paidAt: string | null;
   fulfillmentMode: 'delivery' | 'pickup';
   totalAmount: number;
   payableAmount: number;
@@ -49,6 +58,7 @@ interface OrderRecord {
   address: string;
   memberId: string | null;
   createdAt: string;
+  cancelledAt: string | null;
   items: OrderItemRecord[];
 }
 
@@ -153,6 +163,7 @@ interface CreateProductInput {
 
 interface CreateOrderInput {
   fulfillmentMode: 'delivery' | 'pickup';
+  paymentMethod?: PaymentMethod;
   items: Array<{ productId: string; quantity: number }>;
   customerName: string;
   customerMobile: string;
@@ -203,6 +214,10 @@ function createIso(daysAgo: number) {
   const date = new Date();
   date.setDate(date.getDate() - daysAgo);
   return date.toISOString();
+}
+
+function addMilliseconds(iso: string, milliseconds: number) {
+  return new Date(new Date(iso).getTime() + milliseconds).toISOString();
 }
 
 function formatDateTime(iso: string) {
@@ -452,19 +467,16 @@ export class RuntimeDataService {
 
   createOrder(input: CreateOrderInput) {
     if (!input.items.length) {
-      throw new BadRequestException('至少选择一件商品');
+      throw new BadRequestException('????????');
     }
 
     const items = input.items.map(({ productId, quantity }) => {
       const product = this.products.find((item) => item.id === productId);
       if (!product) {
-        throw new NotFoundException(`商品 ${productId} 不存在`);
+        throw new NotFoundException(`?? ${productId} ???`);
       }
       if (quantity <= 0) {
-        throw new BadRequestException('商品数量必须大于 0');
-      }
-      if (product.stock < quantity) {
-        throw new BadRequestException(`${product.name} 库存不足`);
+        throw new BadRequestException('???????? 0');
       }
 
       return {
@@ -477,7 +489,7 @@ export class RuntimeDataService {
       authUserId: input.memberId ?? null,
       nickname: input.customerName,
       mobile: input.customerMobile,
-      memberLevel: input.memberLevel ?? '普通会员',
+      memberLevel: input.memberLevel ?? '????'
     });
 
     const totalAmount = roundMoney(
@@ -486,50 +498,22 @@ export class RuntimeDataService {
     const payableAmount = roundMoney(
       items.reduce((sum, item) => sum + item.product.memberPrice * item.quantity, 0)
     );
+    const paymentMethod = input.paymentMethod ?? 'balance';
+    const createdAt = new Date().toISOString();
 
-    if (member.balance < payableAmount) {
-      throw new BadRequestException('余额不足，请先充值');
-    }
-
-    for (const item of items) {
-      item.product.stock -= item.quantity;
-      item.product.sales += item.quantity;
-
-      const flashSale = this.flashSales.find(
-        (activity) => activity.productId === item.product.id && activity.status === '进行中'
-      );
-      if (flashSale) {
-        flashSale.stock = Math.max(0, flashSale.stock - item.quantity);
-        flashSale.sold += item.quantity;
-        if (flashSale.stock === 0) {
-          flashSale.status = '已售罄';
-        }
-      }
-
-      const groupBuy = this.groupBuys.find(
-        (activity) => activity.productId === item.product.id && activity.status === '进行中'
-      );
-      if (groupBuy) {
-        groupBuy.completed += Math.max(1, Math.ceil(item.quantity / groupBuy.groupSize));
-      }
-    }
-
-    member.balance = roundMoney(member.balance - payableAmount);
-    member.totalOrders += 1;
-    member.totalSpent = roundMoney(member.totalSpent + payableAmount);
-    member.points += Math.floor(payableAmount / 10);
-    member.growthValue += Math.floor(payableAmount);
-    member.lastOrderAt = new Date().toISOString();
-    if (input.fulfillmentMode === 'delivery') {
-      member.defaultConsignee = input.customerName;
-      member.contactMobile = input.customerMobile;
-      member.defaultAddress = input.address;
+    if (paymentMethod === 'balance' && member.balance < payableAmount) {
+      throw new BadRequestException('?????????');
     }
 
     const order: OrderRecord = {
       id: `o-${String(this.orders.length + 1).padStart(3, '0')}`,
       orderNo: `SM${Date.now()}`,
-      status: input.fulfillmentMode === 'pickup' ? '待提货' : '待发货',
+      status: '\u5f85\u4ed8\u6b3e',
+      paymentMethod,
+      paymentState: 'pending',
+      paymentChannel: paymentMethod === 'balance' ? 'balance' : null,
+      transactionId: null,
+      paidAt: null,
       fulfillmentMode: input.fulfillmentMode,
       totalAmount,
       payableAmount,
@@ -537,7 +521,8 @@ export class RuntimeDataService {
       customerMobile: input.customerMobile,
       address: input.address,
       memberId: member.id,
-      createdAt: new Date().toISOString(),
+      createdAt,
+      cancelledAt: null,
       items: items.map((item) => ({
         productId: item.product.id,
         productName: item.product.name,
@@ -548,16 +533,239 @@ export class RuntimeDataService {
     };
 
     this.orders.unshift(order);
-    this.transactions.unshift({
-      id: `tx-${Date.now()}`,
-      type: '收款',
-      orderNo: order.orderNo,
-      amount: payableAmount,
-      method: '余额支付',
-      createdAt: order.createdAt,
-      memberId: member.id,
-      detail: `${member.nickname} 完成订单支付`
+
+    if (paymentMethod === 'balance') {
+      this.markOrderPaid(order.orderNo, {
+        paymentChannel: 'balance',
+        paidAt: createdAt
+      });
+    }
+
+    return this.toAdminOrder(order);
+  }
+
+  getOrderByOrderNo(orderNo: string) {
+    const order = this.orders.find((item) => item.orderNo === orderNo);
+    return order ? this.toAdminOrder(order) : null;
+  }
+
+  canAccessOrder(orderNo: string, authUserId?: string | null, mobile?: string | null) {
+    const order = this.orders.find((item) => item.orderNo === orderNo);
+    if (!order) {
+      return false;
+    }
+
+    const member = this.findMember(authUserId ?? null, mobile ?? null);
+    if (!member) {
+      return false;
+    }
+
+    return order.memberId === member.id || order.customerMobile === member.mobile;
+  }
+
+  setOrderPaymentChannel(orderNo: string, paymentChannel: PaymentChannel) {
+    const order = this.orders.find((item) => item.orderNo === orderNo);
+    if (!order) {
+      throw new NotFoundException('?????');
+    }
+
+    order.paymentChannel = paymentChannel;
+    return this.toAdminOrder(order);
+  }
+
+  cancelOrder(orderNo: string) {
+    const order = this.orders.find((item) => item.orderNo === orderNo);
+    if (!order) {
+      throw new NotFoundException('?????');
+    }
+
+    if (!this.canCancelOrder(order)) {
+      throw new BadRequestException('????????????????');
+    }
+
+    if (order.paymentMethod === 'wechat' && order.paymentState === 'success') {
+      throw new BadRequestException('????????????????????????');
+    }
+
+    if (order.paymentState === 'success') {
+      const member =
+        this.members.find((item) => item.id === order.memberId) ??
+        this.ensureMemberProfile({
+          authUserId: null,
+          nickname: order.customerName,
+          mobile: order.customerMobile,
+          memberLevel: '????'
+        });
+
+      for (const item of order.items) {
+        const product = this.products.find((entry) => entry.id === item.productId);
+        if (!product) {
+          throw new NotFoundException(`?? ${item.productId} ???`);
+        }
+
+        product.stock += item.quantity;
+        product.sales = Math.max(0, product.sales - item.quantity);
+
+        const flashSale = this.flashSales.find((activity) => activity.productId === product.id);
+        if (flashSale) {
+          flashSale.stock += item.quantity;
+          flashSale.sold = Math.max(0, flashSale.sold - item.quantity);
+          if (flashSale.stock > 0 && flashSale.status !== '?????') {
+            flashSale.status = '?????';
+          }
+        }
+
+        const groupBuy = this.groupBuys.find((activity) => activity.productId === product.id);
+        if (groupBuy) {
+          groupBuy.completed = Math.max(
+            0,
+            groupBuy.completed - Math.max(1, Math.ceil(item.quantity / groupBuy.groupSize))
+          );
+        }
+      }
+
+      if (order.paymentMethod === 'balance') {
+        member.balance = roundMoney(member.balance + order.payableAmount);
+      }
+
+      member.totalOrders = Math.max(0, member.totalOrders - 1);
+      member.totalSpent = roundMoney(Math.max(0, member.totalSpent - order.payableAmount));
+      member.points = Math.max(0, member.points - Math.floor(order.payableAmount / 10));
+      member.growthValue = Math.max(0, member.growthValue - Math.floor(order.payableAmount));
+      member.lastOrderAt = this.getLatestPaidOrderTimeForMember(member.id, order.orderNo);
+
+      this.transactions.unshift({
+        id: `tx-${Date.now()}-refund`,
+        type: '\u9000\u6b3e',
+        orderNo: order.orderNo,
+        amount: order.payableAmount,
+        method:
+          order.paymentMethod === 'balance'
+            ? '\u4f59\u989d\u9000\u56de'
+            : '\u5fae\u4fe1\u9000\u6b3e',
+        createdAt: new Date().toISOString(),
+        memberId: member.id,
+        detail: `${member.nickname} \u64a4\u56de\u8ba2\u5355 ${order.orderNo}`
+      });
+    }
+
+    order.paymentState = 'closed';
+    order.status = '\u5df2\u53d6\u6d88';
+    order.cancelledAt = new Date().toISOString();
+
+    return this.toAdminOrder(order);
+  }
+
+  markOrderPaid(
+    orderNo: string,
+    input: {
+      transactionId?: string | null;
+      paymentChannel?: PaymentChannel | null;
+      paidAt?: string | null;
+    }
+  ) {
+    const order = this.orders.find((item) => item.orderNo === orderNo);
+    if (!order) {
+      throw new NotFoundException('?????');
+    }
+
+    if (order.paymentState === 'closed') {
+      return this.toAdminOrder(order);
+    }
+
+    if (order.paymentState === 'success') {
+      return this.toAdminOrder(order);
+    }
+
+    const member =
+      this.members.find((item) => item.id === order.memberId) ??
+      this.ensureMemberProfile({
+        authUserId: null,
+        nickname: order.customerName,
+        mobile: order.customerMobile,
+        memberLevel: '????'
+      });
+
+    const productItems = order.items.map((item) => {
+      const product = this.products.find((entry) => entry.id === item.productId);
+      if (!product) {
+        throw new NotFoundException(`?? ${item.productId} ???`);
+      }
+      if (product.stock < item.quantity) {
+        throw new BadRequestException(`${product.name} ????`);
+      }
+      return { item, product };
     });
+
+    if (order.paymentMethod === 'balance' && member.balance < order.payableAmount) {
+      throw new BadRequestException('?????????');
+    }
+
+    for (const { item, product } of productItems) {
+      product.stock -= item.quantity;
+      product.sales += item.quantity;
+
+      const flashSale = this.flashSales.find(
+        (activity) => activity.productId === product.id && activity.status === '?????'
+      );
+      if (flashSale) {
+        flashSale.stock = Math.max(0, flashSale.stock - item.quantity);
+        flashSale.sold += item.quantity;
+        if (flashSale.stock === 0) {
+          flashSale.status = '?????';
+        }
+      }
+
+      const groupBuy = this.groupBuys.find(
+        (activity) => activity.productId === product.id && activity.status === '?????'
+      );
+      if (groupBuy) {
+        groupBuy.completed += Math.max(1, Math.ceil(item.quantity / groupBuy.groupSize));
+      }
+    }
+
+    if (order.paymentMethod === 'balance') {
+      member.balance = roundMoney(member.balance - order.payableAmount);
+    }
+
+    member.totalOrders += 1;
+    member.totalSpent = roundMoney(member.totalSpent + order.payableAmount);
+    member.points += Math.floor(order.payableAmount / 10);
+    member.growthValue += Math.floor(order.payableAmount);
+    member.lastOrderAt = input.paidAt ?? new Date().toISOString();
+
+    if (order.fulfillmentMode === 'delivery') {
+      member.defaultConsignee = order.customerName;
+      member.contactMobile = order.customerMobile;
+      member.defaultAddress = order.address;
+    }
+
+    order.paymentState = 'success';
+    order.paymentChannel = input.paymentChannel ?? order.paymentChannel ?? 'native';
+    order.transactionId = input.transactionId ?? order.transactionId ?? null;
+    order.paidAt = input.paidAt ?? new Date().toISOString();
+    order.status =
+      order.fulfillmentMode === 'pickup' ? '\u5f85\u63d0\u8d27' : '\u5f85\u53d1\u8d27';
+
+    if (
+      !this.transactions.some(
+        (entry) => entry.orderNo === order.orderNo && entry.type === '\u6536\u6b3e'
+      )
+    ) {
+      this.transactions.unshift({
+        id: `tx-${Date.now()}`,
+        type: '\u6536\u6b3e',
+        orderNo: order.orderNo,
+        amount: order.payableAmount,
+        method:
+          order.paymentMethod === 'balance'
+            ? '\u4f59\u989d\u652f\u4ed8'
+            : '\u5fae\u4fe1\u652f\u4ed8',
+        createdAt: order.paidAt,
+        memberId: member.id,
+        detail: `${member.nickname} \u5b8c\u6210\u8ba2\u5355\u652f\u4ed8`
+      });
+    }
 
     return this.toAdminOrder(order);
   }
@@ -763,8 +971,12 @@ export class RuntimeDataService {
   }
 
   getDashboardSummary() {
-    const todayOrders = this.orders.filter((order) => isToday(order.createdAt));
-    const monthlyOrders = this.orders.filter((order) => isCurrentMonth(order.createdAt));
+    const todayOrders = this.orders.filter(
+      (order) => isToday(order.createdAt) && order.paymentState === 'success'
+    );
+    const monthlyOrders = this.orders.filter(
+      (order) => isCurrentMonth(order.createdAt) && order.paymentState === 'success'
+    );
     const activeMembers = this.members.filter((member) => member.totalOrders > 0);
     const repeatMembers = activeMembers.filter((member) => member.totalOrders > 1);
     const repurchaseRate = activeMembers.length
@@ -1132,21 +1344,37 @@ export class RuntimeDataService {
         };
       });
 
+      const paymentMethod: PaymentMethod =
+        order.status === 'pending_payment' || order.fulfillmentMode === 'pickup'
+          ? 'wechat'
+          : 'balance';
+      const paymentState: PaymentState = order.status === 'pending_payment' ? 'pending' : 'success';
+      const paidAt = paymentState === 'success' ? createIso(index) : null;
+
       return {
         id: order.id,
         orderNo: order.orderNo,
         status: mapSeedStatus(order.status, order.fulfillmentMode),
+        paymentMethod,
+        paymentState,
+        paymentChannel: paymentState === 'success' ? (paymentMethod === 'wechat' ? 'native' : 'balance') : null,
+        transactionId:
+          paymentState === 'success' && paymentMethod === 'wechat'
+            ? `420000000000000000${index + 1}`
+            : null,
+        paidAt,
         fulfillmentMode: order.fulfillmentMode === 'pickup' ? 'pickup' : 'delivery',
         totalAmount: order.totalAmount,
         payableAmount: order.payableAmount,
-        customerName: '星选会员',
+        customerName: '???????',
         customerMobile: '13800138000',
         address:
           order.fulfillmentMode === 'pickup'
-            ? '浦东新区张江会员店自提点'
-            : '上海市浦东新区张江路 88 号 星选生活馆',
+            ? '??????????????????'
+            : '??????????????? 88 ??????????',
         memberId: 'u-001',
         createdAt: createIso(index),
+        cancelledAt: null,
         items
       } satisfies OrderRecord;
     });
@@ -1206,11 +1434,41 @@ export class RuntimeDataService {
 
   private getTodaySold(productId: string) {
     return this.orders
-      .filter((order) => isToday(order.createdAt))
+      .filter((order) => isToday(order.createdAt) && order.paymentState === 'success')
       .reduce((sum, order) => {
         const item = order.items.find((entry) => entry.productId === productId);
         return sum + (item?.quantity ?? 0);
       }, 0);
+  }
+
+  private getLatestPaidOrderTimeForMember(memberId: string, excludeOrderNo?: string) {
+    const paidOrders = this.orders
+      .filter(
+        (order) =>
+          order.memberId === memberId &&
+          order.paymentState === 'success' &&
+          order.orderNo !== excludeOrderNo
+      )
+      .sort(
+        (left, right) =>
+          new Date(right.paidAt ?? right.createdAt).getTime() -
+          new Date(left.paidAt ?? left.createdAt).getTime()
+      );
+
+    return paidOrders[0]?.paidAt ?? paidOrders[0]?.createdAt ?? null;
+  }
+
+  private canCancelOrder(order: OrderRecord) {
+    if (order.paymentState === 'closed' || order.status === '\u5df2\u53d6\u6d88') {
+      return false;
+    }
+
+    if (order.paymentMethod === 'wechat' && order.paymentState === 'success') {
+      return false;
+    }
+
+    const deadline = new Date(order.createdAt).getTime() + ORDER_CANCEL_WINDOW_MS;
+    return Date.now() <= deadline;
   }
 
   private toProductView(product: ProductRecord) {
@@ -1243,21 +1501,34 @@ export class RuntimeDataService {
   }
 
   private toAdminOrder(order: OrderRecord) {
+    const cancelDeadlineAt = addMilliseconds(order.createdAt, ORDER_CANCEL_WINDOW_MS);
+
     return {
       id: order.id,
       orderNo: order.orderNo,
       status: order.status,
-      fulfillmentMode: order.fulfillmentMode === 'pickup' ? '门店自提' : '快递到家',
+      paymentMethod: order.paymentMethod,
+      paymentState: order.paymentState,
+      paymentChannel: order.paymentChannel,
+      transactionId: order.transactionId,
+      paidAt: order.paidAt,
+      fulfillmentMode:
+        order.fulfillmentMode === 'pickup'
+          ? '\u95e8\u5e97\u81ea\u63d0'
+          : '\u5feb\u9012\u5230\u5bb6',
       payableAmount: order.payableAmount,
       totalAmount: order.totalAmount,
       customerName: order.customerName,
       customerMobile: order.customerMobile,
       address: order.address,
       createdAt: order.createdAt,
+      cancelDeadlineAt,
+      cancelledAt: order.cancelledAt,
+      canCancel: this.canCancelOrder(order),
       itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
       itemSummary: order.items
         .map((item) => `${item.productName} x${item.quantity}`)
-        .join('；'),
+        .join('\uff1b'),
       items: order.items.map((item) => ({ ...item }))
     };
   }

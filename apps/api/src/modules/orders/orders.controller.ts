@@ -1,11 +1,23 @@
-import { Body, Controller, Get, Inject, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  HttpCode,
+  Inject,
+  Param,
+  Post,
+  UseGuards
+} from '@nestjs/common';
 import { ok } from '../../common/api-response';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
+import { WeChatPayService } from '../payments/wechat-pay.service';
 import { RuntimeDataService } from '../runtime-data/runtime-data.service';
 
 interface CreateOrderBody {
   fulfillmentMode: 'delivery' | 'pickup';
+  paymentMethod?: 'balance' | 'wechat';
   items?: Array<{ productId: string; quantity: number }>;
   productIds?: string[];
   consignee?: string;
@@ -17,7 +29,10 @@ interface CreateOrderBody {
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
 export class OrdersController {
-  constructor(@Inject(RuntimeDataService) private readonly runtimeDataService: RuntimeDataService) {}
+  constructor(
+    @Inject(RuntimeDataService) private readonly runtimeDataService: RuntimeDataService,
+    private readonly weChatPayService: WeChatPayService
+  ) {}
 
   @Get()
   getOrders(
@@ -69,6 +84,7 @@ export class OrdersController {
 
     const newOrder = this.runtimeDataService.createOrder({
       fulfillmentMode: body.fulfillmentMode,
+      paymentMethod: body.paymentMethod,
       items,
       customerName,
       customerMobile,
@@ -78,5 +94,32 @@ export class OrdersController {
     });
 
     return ok(newOrder, 'order created');
+  }
+
+  @Post(':orderNo/cancel')
+  @HttpCode(200)
+  async cancelOrder(
+    @Param('orderNo') orderNo: string,
+    @CurrentUser()
+    user?: {
+      sub?: string;
+      mobile?: string | null;
+    }
+  ) {
+    if (!this.runtimeDataService.canAccessOrder(orderNo, user?.sub ?? null, user?.mobile ?? null)) {
+      throw new ForbiddenException('无权撤销该订单');
+    }
+
+    const order = this.runtimeDataService.getOrderByOrderNo(orderNo);
+    if (
+      order &&
+      order.paymentMethod === 'wechat' &&
+      order.paymentState === 'pending' &&
+      process.env.WECHAT_PAY_ENABLED === 'true'
+    ) {
+      await this.weChatPayService.closeOrder(orderNo);
+    }
+
+    return ok(this.runtimeDataService.cancelOrder(orderNo), 'order cancelled');
   }
 }

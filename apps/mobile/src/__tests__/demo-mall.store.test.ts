@@ -4,6 +4,7 @@ import { filterProducts, useDemoMallStore } from '../h5-preview/store';
 import type { HomePayload, MemberProfile, OrderPayload } from '../services/api';
 
 const {
+  cancelOrderMock,
   createOrderMock,
   getOrdersMock,
   getProfileMock,
@@ -45,7 +46,7 @@ const {
       user: {
         id: role === 'admin' ? 'admin-1' : 'user-1',
         role,
-        nickname: role === 'admin' ? '运营管理员' : 'Formal Member',
+        nickname: role === 'admin' ? 'Operations Admin' : 'Formal Member',
         mobile: role === 'user' ? account : '',
         memberLevel: role === 'user' ? 'Gold' : 'Admin'
       }
@@ -57,7 +58,7 @@ const {
         role: 'user' as const,
         nickname,
         mobile,
-        memberLevel: '普通会员'
+        memberLevel: 'Standard'
       }
     })),
     sendSmsCodeMock: vi.fn(async () => ({
@@ -116,14 +117,22 @@ const {
         const order: OrderPayload = {
           id: `o-${state.orders.length + 1}`,
           orderNo: `SM${900 + state.orders.length}`,
-          status: '待发货',
-          fulfillmentMode: '快递到家',
+          status: '\u5f85\u53d1\u8d27',
+          paymentMethod: 'balance',
+          paymentState: 'success',
+          paymentChannel: 'balance',
+          transactionId: null,
+          paidAt: '2026-06-06T10:00:00.000Z',
+          fulfillmentMode: '\u5feb\u9012\u5230\u5bb6',
           payableAmount: total,
           totalAmount: total,
           customerName: consignee,
           customerMobile: mobile,
           address,
           createdAt: '2026-06-06 10:00:00',
+          cancelDeadlineAt: '2026-06-06T10:03:00.000Z',
+          cancelledAt: null,
+          canCancel: true,
           itemCount: items.reduce((sum, item) => sum + item.quantity, 0),
           itemSummary: items.map((item) => `${item.productId} x${item.quantity}`).join(', '),
           items: items.map((item) => ({
@@ -138,7 +147,40 @@ const {
         state.orders = [order, ...state.orders];
         return order;
       }
-    )
+    ),
+    cancelOrderMock: vi.fn(async (orderNo: string) => {
+      const target = state.orders.find((order) => order.orderNo === orderNo);
+      if (!target) {
+        throw new Error('Order not found');
+      }
+
+      state.profile = {
+        ...state.profile,
+        balance: Number((state.profile.balance + target.payableAmount).toFixed(2)),
+        points: Math.max(0, state.profile.points - Math.floor(target.payableAmount / 10)),
+        totalOrders: Math.max(0, state.profile.totalOrders - 1),
+        totalSpent: Number(Math.max(0, state.profile.totalSpent - target.payableAmount).toFixed(2))
+      };
+
+      const cancelledOrder: OrderPayload = {
+        ...target,
+        status: '\u5df2\u53d6\u6d88',
+        paymentMethod: target.paymentMethod ?? 'balance',
+        paymentState: 'closed',
+        paymentChannel: target.paymentChannel ?? 'balance',
+        transactionId: target.transactionId ?? null,
+        paidAt: target.paidAt ?? '2026-06-06T10:00:00.000Z',
+        canCancel: false,
+        cancelDeadlineAt: target.cancelDeadlineAt ?? '2026-06-06T10:03:00.000Z',
+        cancelledAt: '2026-06-06T10:02:00.000Z'
+      };
+
+      state.orders = state.orders.map((order) =>
+        order.orderNo === orderNo ? cancelledOrder : order
+      );
+
+      return cancelledOrder;
+    })
   };
 });
 
@@ -155,7 +197,8 @@ vi.mock('../services/api', async () => {
     },
     ordersClient: {
       ...actual.ordersClient,
-      create: createOrderMock
+      create: createOrderMock,
+      cancel: cancelOrderMock
     },
     memberClient: {
       ...actual.memberClient,
@@ -202,6 +245,7 @@ describe('demo mall store', () => {
     getOrdersMock.mockClear();
     updateProfileMock.mockClear();
     createOrderMock.mockClear();
+    cancelOrderMock.mockClear();
   });
 
   it('merges repeated add-to-cart actions into one cart line', () => {
@@ -244,6 +288,23 @@ describe('demo mall store', () => {
     expect(store.orders).toHaveLength(1);
     expect(store.walletBalance).toBeCloseTo(361.1, 5);
     expect(store.points).toBe(595);
+  });
+
+  it('blocks checkout until the member has confirmed a valid delivery address', async () => {
+    const store = useDemoMallStore();
+
+    await store.login({
+      role: 'user',
+      account: '13800138000',
+      password: 'member123'
+    });
+
+    store.addToCart(sampleProduct);
+    const result = await store.checkout();
+
+    expect(result.success).toBe(false);
+    expect(store.orders).toHaveLength(0);
+    expect(store.feedbackMessage).toContain('收货');
   });
 
   it('only grants the daily sign-in reward once', async () => {
@@ -314,7 +375,7 @@ describe('demo mall store', () => {
 
     expect(adminResult.success).toBe(true);
     expect(store.currentRole).toBe('admin');
-    expect(store.currentUserName).toBe('运营管理员');
+    expect(store.currentUserName).toBe('Operations Admin');
     expect(store.activeAdminShortcut).toBe('products');
   });
 
@@ -325,16 +386,27 @@ describe('demo mall store', () => {
     store.currentRole = 'user';
     store.currentUserName = 'Old Member';
     store.currentUserMobile = '13800138000';
+    store.defaultAddress = 'Shanghai Pudong Old Street 88';
     store.walletBalance = 520;
     store.points = 580;
     store.coupons = 4;
     store.orders = [
       {
         id: 'SM998',
+        orderNo: 'SM998',
         createdAt: '2026-06-06 08:00:00',
         itemCount: 1,
         total: 49.9,
-        status: '待发货',
+        status: '\u5df2\u53d6\u6d88',
+        customerName: 'Old Member',
+        customerMobile: '13800138000',
+        address: 'Shanghai Pudong Old Street 88',
+        paymentMethod: 'balance',
+        paymentState: 'success',
+        paymentChannel: 'balance',
+        canCancel: false,
+        cancelDeadlineAt: '2026-06-06T08:03:00.000Z',
+        cancelledAt: null,
         items: []
       }
     ];
@@ -344,18 +416,24 @@ describe('demo mall store', () => {
 
     const result = await store.register({
       mobile: '13900000009',
-      smsCode: '123456',
       nickname: 'New Member',
       password: 'test123456',
       confirmPassword: 'test123456'
-    });
+    } as never);
 
     expect(result.success).toBe(true);
+    expect(registerMock).toHaveBeenCalledWith(
+      '13900000009',
+      'New Member',
+      'test123456',
+      'test123456'
+    );
     expect(store.currentUserName).toBe('New Member');
     expect(store.currentUserMobile).toBe('13900000009');
     expect(store.walletBalance).toBe(0);
     expect(store.points).toBe(0);
     expect(store.coupons).toBe(0);
+    expect(store.defaultAddress).toBe('');
     expect(store.orders).toHaveLength(0);
   });
 
@@ -367,5 +445,36 @@ describe('demo mall store', () => {
     expect(result.success).toBe(true);
     expect(sendSmsCodeMock).toHaveBeenCalledWith('13900000001', 'register');
     expect(store.feedbackMessage).toContain('123456');
+  });
+
+  it('cancels a just-created order and restores member assets', async () => {
+    const store = useDemoMallStore();
+
+    await store.login({
+      role: 'user',
+      account: '13800138000',
+      password: 'member123'
+    });
+    await store.updateDeliveryProfile({
+      defaultConsignee: 'Luna Zhang',
+      contactMobile: '13911112222',
+      defaultAddress: 'Shanghai Pudong Jinke Rd 1888 Building 2 Room 803'
+    });
+
+    store.addToCart(sampleProduct);
+    const checkoutResult = await store.checkout();
+
+    expect(checkoutResult.success).toBe(true);
+    expect(store.orders).toHaveLength(1);
+    expect(store.walletBalance).toBeCloseTo(470.1, 5);
+
+    const orderNo = store.orders[0].id;
+    const cancelResult = await store.cancelOrder(orderNo);
+
+    expect(cancelResult.success).toBe(true);
+    expect(cancelOrderMock).toHaveBeenCalledWith(orderNo);
+    expect(store.orders[0].status).toBe('\u5df2\u53d6\u6d88');
+    expect(store.walletBalance).toBeCloseTo(520, 5);
+    expect(store.points).toBe(580);
   });
 });
