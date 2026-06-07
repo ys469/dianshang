@@ -78,15 +78,23 @@ interface MemberRecord {
   defaultConsignee: string;
   contactMobile: string;
   defaultAddress: string;
+  lastCheckInAt: string | null;
+  checkinStreak: number;
 }
 
 interface RechargeRecord {
   id: string;
+  rechargeNo: string;
   memberId: string;
   amount: number;
   bonusAmount: number;
   actualAmount: number;
   method: string;
+  paymentMethod: PaymentMethod;
+  paymentState: PaymentState;
+  paymentChannel: PaymentChannel | null;
+  transactionId: string | null;
+  paidAt: string | null;
   createdAt: string;
 }
 
@@ -191,6 +199,18 @@ function startOfCurrentWeek() {
 
 function isToday(iso: string) {
   return new Date(iso).getTime() >= startOfToday();
+}
+
+function isYesterday(iso: string) {
+  const date = new Date(iso);
+  const now = new Date();
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+
+  return (
+    date.getFullYear() === yesterday.getFullYear() &&
+    date.getMonth() === yesterday.getMonth() &&
+    date.getDate() === yesterday.getDate()
+  );
 }
 
 function isCurrentMonth(iso: string) {
@@ -549,6 +569,11 @@ export class RuntimeDataService {
     return order ? this.toAdminOrder(order) : null;
   }
 
+  getRechargeByRechargeNo(rechargeNo: string) {
+    const recharge = this.rechargeRecords.find((item) => item.rechargeNo === rechargeNo);
+    return recharge ? this.toRechargeView(recharge) : null;
+  }
+
   canAccessOrder(orderNo: string, authUserId?: string | null, mobile?: string | null) {
     const order = this.orders.find((item) => item.orderNo === orderNo);
     if (!order) {
@@ -561,6 +586,20 @@ export class RuntimeDataService {
     }
 
     return order.memberId === member.id || order.customerMobile === member.mobile;
+  }
+
+  canAccessRecharge(rechargeNo: string, authUserId?: string | null, mobile?: string | null) {
+    const recharge = this.rechargeRecords.find((item) => item.rechargeNo === rechargeNo);
+    if (!recharge) {
+      return false;
+    }
+
+    const member = this.findMember(authUserId ?? null, mobile ?? null);
+    if (!member) {
+      return false;
+    }
+
+    return recharge.memberId === member.id;
   }
 
   setOrderPaymentChannel(orderNo: string, paymentChannel: PaymentChannel) {
@@ -916,6 +955,160 @@ export class RuntimeDataService {
     return this.toMemberProfile(member);
   }
 
+  claimDailyCheckIn(input: {
+    authUserId?: string | null;
+    mobile?: string | null;
+    nickname?: string;
+    memberLevel?: string | null;
+  }) {
+    const member =
+      this.findMember(input.authUserId ?? null, input.mobile ?? null) ??
+      this.ensureMemberProfile({
+        authUserId: input.authUserId ?? null,
+        mobile: input.mobile ?? '',
+        nickname: input.nickname ?? '商城会员',
+        memberLevel: input.memberLevel ?? '普通会员'
+      });
+
+    if (member.lastCheckInAt && isToday(member.lastCheckInAt)) {
+      throw new BadRequestException('今天已经签到过了，明天再来');
+    }
+
+    const nextStreak = member.lastCheckInAt && isYesterday(member.lastCheckInAt)
+      ? member.checkinStreak + 1
+      : 1;
+
+    const sortedRules = [...this.checkinRules].sort((left, right) => left.day - right.day);
+    const matchedRule =
+      sortedRules.find((item) => item.day === nextStreak) ??
+      sortedRules.find((item) => item.day === 1) ??
+      sortedRules[0];
+
+    const rewardText = matchedRule?.reward ?? '5 积分';
+    const rewardPoints = Number((rewardText.match(/(\d+)\s*积分/u)?.[1] ?? '5'));
+    const rewardCoupons = rewardText.includes('优惠券') ? 1 : 0;
+
+    member.points += rewardPoints;
+    member.coupons += rewardCoupons;
+    member.lastCheckInAt = new Date().toISOString();
+    member.checkinStreak = nextStreak;
+
+    this.transactions.unshift({
+      id: `tx-${Date.now()}-checkin`,
+      type: '签到奖励',
+      orderNo: `CHECKIN-${Date.now()}`,
+      amount: rewardPoints,
+      method: '积分入账',
+      createdAt: member.lastCheckInAt,
+      memberId: member.id,
+      detail: `${member.nickname} 连续签到 ${nextStreak} 天，奖励 ${rewardText}`
+    });
+
+    return {
+      rewardPoints,
+      rewardCoupons,
+      rewardLabel: rewardText,
+      streak: nextStreak,
+      profile: this.toMemberProfile(member)
+    };
+  }
+
+  createRechargeRequest(input: {
+    authUserId?: string | null;
+    mobile?: string | null;
+    nickname?: string;
+    memberLevel?: string | null;
+    amount: number;
+    paymentMethod?: PaymentMethod;
+    paymentChannel?: PaymentChannel | null;
+  }) {
+    if (input.amount <= 0) {
+      throw new BadRequestException('\u5145\u503c\u91d1\u989d\u5fc5\u987b\u5927\u4e8e 0');
+    }
+
+    const member = this.ensureMemberProfile({
+      authUserId: input.authUserId ?? null,
+      mobile: input.mobile ?? '',
+      nickname: input.nickname ?? '\u5546\u57ce\u4f1a\u5458',
+      memberLevel: input.memberLevel ?? '\u666e\u901a\u4f1a\u5458'
+    });
+
+    const amount = roundMoney(input.amount);
+    const bonusAmount = getRechargeBonus(amount);
+    const actualAmount = roundMoney(amount + bonusAmount);
+    const paymentMethod = input.paymentMethod ?? 'wechat';
+    const createdAt = new Date().toISOString();
+
+    const recharge: RechargeRecord = {
+      id: `rc-${Date.now()}`,
+      rechargeNo: `RC${Date.now()}`,
+      memberId: member.id,
+      amount,
+      bonusAmount,
+      actualAmount,
+      method: paymentMethod === 'balance' ? '\u4f59\u989d\u5145\u503c' : '\u5fae\u4fe1\u652f\u4ed8',
+      paymentMethod,
+      paymentState: 'pending',
+      paymentChannel: input.paymentChannel ?? null,
+      transactionId: null,
+      paidAt: null,
+      createdAt
+    };
+
+    this.rechargeRecords.unshift(recharge);
+
+    return this.toRechargeView(recharge);
+  }
+
+  markRechargePaid(
+    rechargeNo: string,
+    input: {
+      transactionId?: string | null;
+      paymentChannel?: PaymentChannel | null;
+      paidAt?: string | null;
+    }
+  ) {
+    const recharge = this.rechargeRecords.find((item) => item.rechargeNo === rechargeNo);
+    if (!recharge) {
+      throw new NotFoundException('\u5145\u503c\u8bb0\u5f55\u4e0d\u5b58\u5728');
+    }
+
+    if (recharge.paymentState === 'success') {
+      return this.toRechargeView(recharge);
+    }
+
+    const member =
+      this.members.find((item) => item.id === recharge.memberId) ??
+      this.ensureMemberProfile({
+        authUserId: null,
+        mobile: '',
+        nickname: '\u5546\u57ce\u4f1a\u5458',
+        memberLevel: '\u666e\u901a\u4f1a\u5458'
+      });
+
+    member.balance = roundMoney(member.balance + recharge.actualAmount);
+
+    recharge.paymentState = 'success';
+    recharge.paymentChannel = input.paymentChannel ?? recharge.paymentChannel ?? 'h5';
+    recharge.transactionId = input.transactionId ?? recharge.transactionId ?? null;
+    recharge.paidAt = input.paidAt ?? new Date().toISOString();
+    recharge.method =
+      recharge.paymentMethod === 'balance' ? '\u4f59\u989d\u5145\u503c' : '\u5fae\u4fe1\u652f\u4ed8';
+
+    this.transactions.unshift({
+      id: `tx-${Date.now()}-recharge`,
+      type: '\u5145\u503c',
+      orderNo: recharge.rechargeNo,
+      amount: recharge.actualAmount,
+      method: recharge.method,
+      createdAt: recharge.paidAt,
+      memberId: member.id,
+      detail: `${member.nickname} \u5145\u503c ${recharge.amount} \u5143\uff0c\u5230\u8d26 ${recharge.actualAmount} \u5143`
+    });
+
+    return this.toRechargeView(recharge);
+  }
+
   rechargeMember(input: {
     authUserId?: string | null;
     mobile?: string | null;
@@ -923,51 +1116,16 @@ export class RuntimeDataService {
     memberLevel?: string | null;
     amount: number;
   }) {
-    if (input.amount <= 0) {
-      throw new BadRequestException('充值金额必须大于 0');
-    }
-
-    const member = this.ensureMemberProfile({
-      authUserId: input.authUserId ?? null,
-      mobile: input.mobile ?? '',
-      nickname: input.nickname ?? '商城会员',
-      memberLevel: input.memberLevel ?? '普通会员',
+    const recharge = this.createRechargeRequest({
+      ...input,
+      paymentMethod: 'wechat',
+      paymentChannel: 'h5'
     });
 
-    const bonusAmount = getRechargeBonus(input.amount);
-    const actualAmount = roundMoney(input.amount + bonusAmount);
-    member.balance = roundMoney(member.balance + actualAmount);
-
-    const recharge: RechargeRecord = {
-      id: `rc-${Date.now()}`,
-      memberId: member.id,
-      amount: roundMoney(input.amount),
-      bonusAmount,
-      actualAmount,
-      method: '微信支付',
-      createdAt: new Date().toISOString()
-    };
-
-    this.rechargeRecords.unshift(recharge);
-    this.transactions.unshift({
-      id: `tx-${Date.now()}-recharge`,
-      type: '充值',
-      orderNo: '--',
-      amount: actualAmount,
-      method: '微信支付',
-      createdAt: recharge.createdAt,
-      memberId: member.id,
-      detail: `${member.nickname} 充值 ${input.amount} 元，到账 ${actualAmount} 元`
+    return this.markRechargePaid(recharge.rechargeNo, {
+      paymentChannel: 'h5',
+      paidAt: recharge.createdAt
     });
-
-    return {
-      id: recharge.id,
-      amount: recharge.amount,
-      bonusAmount: recharge.bonusAmount,
-      actualAmount: recharge.actualAmount,
-      balanceAfter: member.balance,
-      createdAt: recharge.createdAt
-    };
   }
 
   getDashboardSummary() {
@@ -994,7 +1152,9 @@ export class RuntimeDataService {
       members: this.members.length,
       repurchaseRate,
       rechargeAmount: roundMoney(
-        this.rechargeRecords.reduce((sum, item) => sum + item.actualAmount, 0)
+        this.rechargeRecords
+          .filter((item) => item.paymentState === 'success')
+          .reduce((sum, item) => sum + item.actualAmount, 0)
       )
     };
   }
@@ -1068,6 +1228,7 @@ export class RuntimeDataService {
     }));
 
     const rechargeNotifications: NotificationRecord[] = this.rechargeRecords
+      .filter((record) => record.paymentState === 'success')
       .slice(0, 4)
       .map((record) => {
         const member = this.members.find((item) => item.id === record.memberId);
@@ -1260,7 +1421,9 @@ export class RuntimeDataService {
       lastOrderAt: null,
       defaultConsignee: input.nickname,
       contactMobile: input.mobile,
-      defaultAddress: '上海市浦东新区张江路 88 号 星选生活馆'
+      defaultAddress: '上海市浦东新区张江路 88 号 星选生活馆',
+      lastCheckInAt: null,
+      checkinStreak: 0
     };
 
     this.members.unshift(member);
@@ -1399,7 +1562,9 @@ export class RuntimeDataService {
         lastOrderAt: memberOrders[0]?.createdAt ?? null,
         defaultConsignee: member.nickname,
         contactMobile: mobile,
-        defaultAddress: '上海市浦东新区张江路 88 号 星选生活馆'
+        defaultAddress: '上海市浦东新区张江路 88 号 星选生活馆',
+        lastCheckInAt: null,
+        checkinStreak: 0
       } satisfies MemberRecord;
     });
   }
@@ -1545,7 +1710,9 @@ export class RuntimeDataService {
       coupons: member.coupons,
       totalOrders: member.totalOrders,
       totalSpent: member.totalSpent,
-      lastOrderAt: member.lastOrderAt
+      lastOrderAt: member.lastOrderAt,
+      lastCheckInAt: member.lastCheckInAt,
+      checkinStreak: member.checkinStreak
     };
   }
 
@@ -1555,6 +1722,25 @@ export class RuntimeDataService {
       defaultConsignee: member.defaultConsignee,
       contactMobile: member.contactMobile,
       defaultAddress: member.defaultAddress
+    };
+  }
+
+  private toRechargeView(recharge: RechargeRecord) {
+    const member = this.members.find((item) => item.id === recharge.memberId);
+
+    return {
+      id: recharge.id,
+      rechargeNo: recharge.rechargeNo,
+      amount: recharge.amount,
+      bonusAmount: recharge.bonusAmount,
+      actualAmount: recharge.actualAmount,
+      balanceAfter: member?.balance ?? 0,
+      paymentMethod: recharge.paymentMethod,
+      paymentState: recharge.paymentState,
+      paymentChannel: recharge.paymentChannel,
+      transactionId: recharge.transactionId,
+      paidAt: recharge.paidAt,
+      createdAt: recharge.createdAt
     };
   }
 }

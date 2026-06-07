@@ -3,11 +3,18 @@ import {
   authClient,
   memberClient,
   ordersClient,
+  paymentsClient,
+  type CheckInPayload,
   type HomePayload,
   type MemberProfile,
-  type OrderPayload
+  type OrderPayload,
+  type WechatRechargeSessionPayload
 } from '../services/api';
-import { removeClientStorageItem, setClientStorageItem } from '../services/client-storage';
+import {
+  getClientStorageItem,
+  removeClientStorageItem,
+  setClientStorageItem
+} from '../services/client-storage';
 
 export type DemoProduct = HomePayload['sections'][number]['products'][number];
 
@@ -38,6 +45,13 @@ export interface DemoOrder {
   cancelDeadlineAt: string;
   cancelledAt: string | null;
   items: CartItem[];
+}
+
+export interface SupportMessage {
+  id: string;
+  role: 'assistant' | 'user';
+  content: string;
+  createdAt: string;
 }
 
 export type ActivePanel =
@@ -169,8 +183,8 @@ function createFallbackOrder(items: CartItem[]): DemoOrder {
   };
 }
 
-function createResult(success: boolean, message: string) {
-  return { success, message };
+function createResult<T = undefined>(success: boolean, message: string, data?: T) {
+  return { success, message, data };
 }
 
 function setStorageItem(key: string, value: string) {
@@ -207,7 +221,31 @@ function createEmptyMemberState() {
     walletBalance: INITIAL_WALLET_BALANCE,
     points: INITIAL_POINTS,
     coupons: INITIAL_COUPONS,
-    orders: [] as DemoOrder[]
+    orders: [] as DemoOrder[],
+    dailyCheckInClaimed: false
+  };
+}
+
+function isTodayDate(value: string | null) {
+  if (!value) {
+    return false;
+  }
+
+  const date = new Date(value);
+  const now = new Date();
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+function createSupportGreeting(): SupportMessage {
+  return {
+    id: 'support-greeting',
+    role: 'assistant',
+    content: '您好，我是智能会员商城 AI 客服，可以帮您查询订单、余额、积分、收货地址和充值问题。',
+    createdAt: new Date().toISOString()
   };
 }
 
@@ -234,6 +272,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
     defaultConsignee: '',
     contactMobile: '',
     defaultAddress: '',
+    supportMessages: [createSupportGreeting()] as SupportMessage[],
     supportReply: '在线客服通常会在 5 分钟内响应。'
   }),
   getters: {
@@ -252,6 +291,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.defaultConsignee = profile.defaultConsignee || profile.nickname;
       this.contactMobile = profile.contactMobile || profile.mobile;
       this.defaultAddress = profile.defaultAddress || '';
+      this.dailyCheckInClaimed = isTodayDate(profile.lastCheckInAt);
     },
 
     resetMemberSessionData() {
@@ -260,11 +300,12 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.points = emptyState.points;
       this.coupons = emptyState.coupons;
       this.orders = emptyState.orders;
+      this.dailyCheckInClaimed = emptyState.dailyCheckInClaimed;
       this.defaultAddress = '';
       this.cart = [];
       this.activePanel = null;
       this.selectedProduct = null;
-      this.dailyCheckInClaimed = false;
+      this.supportMessages = [createSupportGreeting()];
     },
 
     async syncMemberData() {
@@ -275,6 +316,43 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
       this.applyMemberProfile(profile);
       this.orders = orders.map((order) => mapApiOrderToDemoOrder(order));
+    },
+
+    async restoreSession() {
+      const token = getClientStorageItem(TOKEN_KEY);
+      const rawUser = getClientStorageItem(USER_KEY);
+
+      if (!token || !rawUser) {
+        return createResult(false, '未找到已保存的登录状态');
+      }
+
+      try {
+        const user = JSON.parse(rawUser) as {
+          nickname: string;
+          mobile?: string | null;
+          role: LoginRole;
+        };
+
+        this.isAuthenticated = true;
+        this.currentRole = user.role;
+        this.currentUserName = user.nickname;
+        this.currentUserMobile = user.mobile ?? '';
+        this.defaultConsignee = user.nickname;
+        this.contactMobile = user.mobile ?? '';
+        this.activeAdminShortcut = user.role === 'admin' ? 'products' : null;
+
+        if (user.role === 'user') {
+          await this.syncMemberData();
+        }
+
+        return createResult(true, '已恢复登录状态');
+      } catch (error) {
+        this.logout();
+        return createResult(
+          false,
+          error instanceof Error ? error.message : '恢复登录状态失败'
+        );
+      }
     },
 
     async login(payload: LoginPayload) {
@@ -439,6 +517,8 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.activePanel = null;
       this.activeAdminShortcut = null;
       this.selectedProduct = null;
+      this.dailyCheckInClaimed = false;
+      this.supportMessages = [createSupportGreeting()];
       removeStorageItem(TOKEN_KEY);
       removeStorageItem(USER_KEY);
       this.feedbackMessage = '已退出当前账号';
@@ -640,16 +720,26 @@ export const useDemoMallStore = defineStore('demo-mall', {
       }
     },
 
-    claimDailyCheckIn() {
+    async claimDailyCheckIn() {
       if (this.dailyCheckInClaimed) {
         this.feedbackMessage = '今天已经签到过了，明天再来';
         return createResult(false, this.feedbackMessage);
       }
 
-      this.dailyCheckInClaimed = true;
-      this.points += 20;
-      this.feedbackMessage = '签到成功，已到账 20 积分';
-      return createResult(true, this.feedbackMessage);
+      try {
+        const result = await memberClient.claimDailyCheckIn();
+        this.applyMemberProfile(result.profile);
+        this.dailyCheckInClaimed = true;
+        this.feedbackMessage =
+          result.rewardCoupons > 0
+            ? `签到成功，已到账 ${result.rewardPoints} 积分，并发放 ${result.rewardCoupons} 张优惠券`
+            : `签到成功，已到账 ${result.rewardPoints} 积分`;
+        return createResult(true, this.feedbackMessage, result);
+      } catch (error) {
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '签到失败，请稍后重试';
+        return createResult(false, this.feedbackMessage);
+      }
     },
 
     async recharge(amount = 100) {
@@ -674,6 +764,105 @@ export const useDemoMallStore = defineStore('demo-mall', {
       }
     },
 
+    async createRechargeSession(
+      amount = 100,
+      channel: 'native' | 'h5' = 'h5',
+      payerClientIp?: string
+    ) {
+      try {
+        const payload: {
+          amount: number;
+          channel: 'native' | 'h5';
+          payerClientIp?: string;
+        } = {
+          amount,
+          channel
+        };
+
+        if (payerClientIp) {
+          payload.payerClientIp = payerClientIp;
+        }
+
+        const session = await paymentsClient.createRechargeSession(payload);
+        this.activePanel = 'wallet';
+        this.feedbackMessage = `已创建微信充值订单 ${session.rechargeNo}，等待支付完成`;
+        return createResult(true, this.feedbackMessage, session);
+      } catch (error) {
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '充值发起失败，请稍后重试';
+        return createResult(false, this.feedbackMessage);
+      }
+    },
+
+    async syncRechargeStatus(rechargeNo: string) {
+      try {
+        const recharge = await paymentsClient.getRechargeStatus(rechargeNo);
+        if (recharge.paymentState === 'success') {
+          const profile = await memberClient.getProfile().catch(() => null);
+          if (profile) {
+            this.applyMemberProfile(profile);
+          } else {
+            this.walletBalance = recharge.balanceAfter;
+          }
+          this.feedbackMessage = '充值已到账，余额已更新';
+        } else {
+          this.feedbackMessage = '充值订单仍在处理中，请稍后刷新';
+        }
+
+        this.activePanel = 'wallet';
+        return createResult(true, this.feedbackMessage, recharge);
+      } catch (error) {
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '充值状态查询失败，请稍后重试';
+        return createResult(false, this.feedbackMessage);
+      }
+    },
+
+    async sendSupportMessage(message: string) {
+      const content = message.trim();
+      if (!content) {
+        this.feedbackMessage = '请输入要咨询的问题';
+        return createResult(false, this.feedbackMessage);
+      }
+
+      const history = this.supportMessages
+        .filter((entry) => entry.id !== 'support-greeting')
+        .map((entry) => ({
+          role: entry.role,
+          content: entry.content
+        }));
+
+      this.supportMessages.push({
+        id: `support-user-${Date.now()}`,
+        role: 'user',
+        content,
+        createdAt: new Date().toISOString()
+      });
+
+      try {
+        const result = await memberClient.sendSupportMessage({
+          message: content,
+          history
+        });
+
+        this.supportMessages.push({
+          id: `support-assistant-${Date.now()}`,
+          role: 'assistant',
+          content: result.reply,
+          createdAt: new Date().toISOString()
+        });
+        this.supportReply = result.reply;
+        this.activePanel = 'support';
+        this.feedbackMessage = 'AI 客服已回复';
+        return createResult(true, this.feedbackMessage, result);
+      } catch (error) {
+        this.supportMessages.pop();
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '客服消息发送失败，请稍后重试';
+        return createResult(false, this.feedbackMessage);
+      }
+    },
+
     handleProfileAction(action: ProfileAction) {
       switch (action) {
         case 'orders':
@@ -685,7 +874,9 @@ export const useDemoMallStore = defineStore('demo-mall', {
           this.feedbackMessage = '已打开收货地址';
           return createResult(true, this.feedbackMessage);
         case 'recharge':
-          return this.recharge(100);
+          this.activePanel = 'wallet';
+          this.feedbackMessage = '已打开充值中心';
+          return createResult(true, this.feedbackMessage);
         case 'points':
           this.activePanel = 'points';
           this.feedbackMessage = '已打开积分商城';
@@ -694,7 +885,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
           return this.claimDailyCheckIn();
         case 'support':
           this.activePanel = 'support';
-          this.feedbackMessage = '客服入口已打开';
+          this.feedbackMessage = 'AI 客服会话已打开';
           return createResult(true, this.feedbackMessage);
       }
     }

@@ -104,6 +104,7 @@ const {
   searchQuery,
   selectedCategoryId,
   selectedProduct,
+  supportMessages,
   supportReply,
   unreadMessages,
   walletBalance
@@ -114,6 +115,10 @@ const addressForm = reactive({
   contactMobile: '',
   defaultAddress: ''
 });
+
+const supportDraft = ref('');
+const supportSubmitting = ref(false);
+const rechargeSubmitting = ref(false);
 
 const nowTick = ref(Date.now());
 let orderClock: ReturnType<typeof setInterval> | null = null;
@@ -139,11 +144,36 @@ const confirmedAddressSummary = computed(() => ({
   address: defaultAddress.value || '未填写收货地址'
 }));
 
+function buildRechargeReturnUrl(rechargeNo: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('rechargeNo', rechargeNo);
+  return url.toString();
+}
+
+function attachWechatRedirect(h5Url: string, rechargeNo: string) {
+  const separator = h5Url.includes('?') ? '&' : '?';
+  return `${h5Url}${separator}redirect_url=${encodeURIComponent(buildRechargeReturnUrl(rechargeNo))}`;
+}
+
 onMounted(() => {
+  void mallStore.restoreSession().catch(() => undefined);
   void homeStore.fetchHome();
   orderClock = window.setInterval(() => {
     nowTick.value = Date.now();
   }, 1000);
+
+  const rechargeNo = new URL(window.location.href).searchParams.get('rechargeNo');
+  if (rechargeNo) {
+    void mallStore
+      .restoreSession()
+      .catch(() => undefined)
+      .then(() => mallStore.syncRechargeStatus(rechargeNo))
+      .finally(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('rechargeNo');
+      window.history.replaceState({}, '', url.toString());
+      });
+  }
 });
 
 onUnmounted(() => {
@@ -377,6 +407,46 @@ async function handleSaveAddress() {
     addressForm.defaultConsignee = defaultConsignee.value;
     addressForm.contactMobile = contactMobile.value;
     addressForm.defaultAddress = defaultAddress.value;
+  }
+}
+
+async function handleWechatRecharge(amount = 100) {
+  if (rechargeSubmitting.value) {
+    return;
+  }
+
+  rechargeSubmitting.value = true;
+  try {
+    const result = await mallStore.createRechargeSession(amount, 'h5');
+    if (!result.success || !result.data?.h5Url) {
+      return;
+    }
+
+    window.location.href = attachWechatRedirect(result.data.h5Url, result.data.rechargeNo);
+  } finally {
+    rechargeSubmitting.value = false;
+  }
+}
+
+async function handleSendSupportMessage() {
+  if (supportSubmitting.value) {
+    return;
+  }
+
+  const message = supportDraft.value.trim();
+  if (!message) {
+    mallStore.setFeedback('请输入要咨询的问题');
+    return;
+  }
+
+  supportSubmitting.value = true;
+  try {
+    const result = await mallStore.sendSupportMessage(message);
+    if (result.success) {
+      supportDraft.value = '';
+    }
+  } finally {
+    supportSubmitting.value = false;
   }
 }
 
@@ -1126,8 +1196,17 @@ function handleLogout(nextRole: LoginRole = 'user') {
               <strong>当前余额</strong>
               <p class="summary-total small">¥{{ walletBalance.toFixed(2) }}</p>
             </article>
-            <button type="button" class="member-button action-button" @click="mallStore.recharge(100)">
-              再充 ¥100
+            <article class="info-card">
+              <strong>微信充值</strong>
+              <p>充值后将跳转到微信支付完成付款，支付成功后余额会自动回写到账户。</p>
+            </article>
+            <button
+              type="button"
+              class="member-button action-button"
+              :disabled="rechargeSubmitting"
+              @click="handleWechatRecharge(100)"
+            >
+              {{ rechargeSubmitting ? '正在拉起微信支付...' : '微信充值 ¥100' }}
             </button>
           </div>
 
@@ -1150,12 +1229,33 @@ function handleLogout(nextRole: LoginRole = 'user') {
               <strong>在线客服</strong>
               <p>{{ supportReply }}</p>
             </article>
+            <div class="support-chat">
+              <article
+                v-for="message in supportMessages"
+                :key="message.id"
+                :class="['chat-bubble', `chat-${message.role}`]"
+              >
+                <strong>{{ message.role === 'assistant' ? 'AI 客服' : '我' }}</strong>
+                <p>{{ message.content }}</p>
+              </article>
+            </div>
+            <label class="panel-field">
+              <span>输入问题</span>
+              <textarea
+                :value="supportDraft"
+                class="panel-textarea"
+                rows="3"
+                placeholder="例如：我的订单什么时候发货？"
+                @input="supportDraft = ($event.target as HTMLTextAreaElement).value"
+              />
+            </label>
             <button
               type="button"
               class="member-button action-button"
-              @click="mallStore.setFeedback('客服会话已创建，稍后会有专员跟进')"
+              :disabled="supportSubmitting"
+              @click="handleSendSupportMessage"
             >
-              发起会话
+              {{ supportSubmitting ? 'AI 正在回复...' : '发送给 AI 客服' }}
             </button>
           </div>
         </section>
@@ -1497,6 +1597,47 @@ p {
 .panel-field input:focus,
 .panel-textarea:focus {
   border-color: rgba(124, 77, 255, 0.36);
+}
+
+.support-chat {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.chat-bubble {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+}
+
+.chat-bubble strong {
+  font-size: 12px;
+}
+
+.chat-bubble p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.chat-assistant {
+  background: #f7f5ff;
+  color: #433467;
+}
+
+.chat-user {
+  background: rgba(124, 77, 255, 0.12);
+  color: #4b2ab3;
+}
+
+.member-button:disabled,
+.ghost-button:disabled,
+.primary-button:disabled,
+.close-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .message-button {

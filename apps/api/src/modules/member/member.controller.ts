@@ -3,11 +3,15 @@ import { ok } from '../../common/api-response';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
 import { RuntimeDataService } from '../runtime-data/runtime-data.service';
+import { AiSupportService } from './ai-support.service';
 
 @Controller('member')
 @UseGuards(JwtAuthGuard)
 export class MemberController {
-  constructor(@Inject(RuntimeDataService) private readonly runtimeDataService: RuntimeDataService) {}
+  constructor(
+    @Inject(RuntimeDataService) private readonly runtimeDataService: RuntimeDataService,
+    private readonly aiSupportService: AiSupportService
+  ) {}
 
   @Get('profile')
   getProfile(
@@ -68,6 +72,55 @@ export class MemberController {
     }
   ) {
     return ok(this.runtimeDataService.getOrdersForMember(user?.sub ?? null, user?.mobile ?? null));
+  }
+
+  @Post('check-in')
+  claimDailyCheckIn(
+    @CurrentUser()
+    user?: {
+      sub?: string;
+      mobile?: string | null;
+      nickname?: string;
+      memberLevel?: string | null;
+    }
+  ) {
+    return ok(
+      this.runtimeDataService.claimDailyCheckIn({
+        authUserId: user?.sub ?? null,
+        mobile: user?.mobile ?? null,
+        nickname: user?.nickname,
+        memberLevel: user?.memberLevel ?? null
+      }),
+      'check-in completed'
+    );
+  }
+
+  @Post('support-chat')
+  async supportChat(
+    @Body()
+    body: {
+      message: string;
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    },
+    @CurrentUser()
+    user?: {
+      sub?: string;
+      mobile?: string | null;
+      nickname?: string;
+      memberLevel?: string | null;
+    }
+  ) {
+    return ok(
+      await this.aiSupportService.reply({
+        authUserId: user?.sub ?? null,
+        mobile: user?.mobile ?? null,
+        nickname: user?.nickname,
+        memberLevel: user?.memberLevel ?? null,
+        message: body.message,
+        history: body.history ?? []
+      }),
+      'support reply generated'
+    );
   }
 
   @Post('recharge')

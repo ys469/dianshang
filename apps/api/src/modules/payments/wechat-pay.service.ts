@@ -26,6 +26,18 @@ interface CheckoutSessionInput {
   payerClientIp: string;
 }
 
+interface RechargeCheckoutSessionInput {
+  amount: number;
+  channel: 'native' | 'h5';
+  payerClientIp: string;
+  member: {
+    authUserId?: string | null;
+    mobile?: string | null;
+    nickname?: string;
+    memberLevel?: string | null;
+  };
+}
+
 @Injectable()
 export class WeChatPayService {
   constructor(private readonly runtimeDataService: RuntimeDataService) {}
@@ -77,6 +89,55 @@ export class WeChatPayService {
     };
   }
 
+  async createRechargeCheckoutSession(input: RechargeCheckoutSessionInput) {
+    const config = this.getConfig();
+    const recharge = this.runtimeDataService.createRechargeRequest({
+      authUserId: input.member.authUserId ?? null,
+      mobile: input.member.mobile ?? null,
+      nickname: input.member.nickname,
+      memberLevel: input.member.memberLevel ?? null,
+      amount: input.amount,
+      paymentMethod: 'wechat',
+      paymentChannel: input.channel
+    });
+
+    const requestBody: Record<string, unknown> = {
+      appid: config.appId,
+      mchid: config.mchId,
+      description: `\u4f1a\u5458\u5145\u503c ${recharge.amount.toFixed(2)} \u5143`,
+      out_trade_no: recharge.rechargeNo,
+      notify_url: config.notifyUrl,
+      amount: {
+        total: Math.round(recharge.amount * 100),
+        currency: 'CNY'
+      }
+    };
+
+    if (input.channel === 'h5') {
+      requestBody.scene_info = {
+        payer_client_ip: input.payerClientIp,
+        h5_info: {
+          type: 'Wap'
+        }
+      };
+    }
+
+    const path =
+      input.channel === 'h5' ? '/v3/pay/transactions/h5' : '/v3/pay/transactions/native';
+    const response = await this.requestWeChat('POST', path, requestBody, config);
+
+    return {
+      rechargeNo: recharge.rechargeNo,
+      amount: recharge.amount,
+      bonusAmount: recharge.bonusAmount,
+      actualAmount: recharge.actualAmount,
+      channel: input.channel,
+      h5Url: typeof response.h5_url === 'string' ? response.h5_url : null,
+      codeUrl: typeof response.code_url === 'string' ? response.code_url : null,
+      paymentState: recharge.paymentState
+    };
+  }
+
   async getOrderStatus(orderNo: string) {
     const order = this.runtimeDataService.getOrderByOrderNo(orderNo);
     if (!order) {
@@ -92,6 +153,23 @@ export class WeChatPayService {
     }
 
     return this.runtimeDataService.getOrderByOrderNo(orderNo);
+  }
+
+  async getRechargeStatus(rechargeNo: string) {
+    const recharge = this.runtimeDataService.getRechargeByRechargeNo(rechargeNo);
+    if (!recharge) {
+      throw new NotFoundException('\u5145\u503c\u8bb0\u5f55\u4e0d\u5b58\u5728');
+    }
+
+    if (recharge.paymentMethod === 'wechat' && recharge.paymentState === 'pending') {
+      try {
+        await this.syncRechargeStatus(rechargeNo);
+      } catch {
+        // Keep local pending state if upstream query is temporarily unavailable.
+      }
+    }
+
+    return this.runtimeDataService.getRechargeByRechargeNo(rechargeNo);
   }
 
   async closeOrder(orderNo: string) {
@@ -149,10 +227,21 @@ export class WeChatPayService {
     };
 
     if (payload.event_type === 'TRANSACTION.SUCCESS' && resource.out_trade_no) {
-      this.runtimeDataService.markOrderPaid(resource.out_trade_no, {
-        transactionId: resource.transaction_id ?? null,
-        paidAt: resource.success_time ?? new Date().toISOString()
-      });
+      const paidAt = resource.success_time ?? new Date().toISOString();
+      const transactionId = resource.transaction_id ?? null;
+
+      if (this.runtimeDataService.getOrderByOrderNo(resource.out_trade_no)) {
+        this.runtimeDataService.markOrderPaid(resource.out_trade_no, {
+          transactionId,
+          paidAt
+        });
+      } else if (this.runtimeDataService.getRechargeByRechargeNo(resource.out_trade_no)) {
+        this.runtimeDataService.markRechargePaid(resource.out_trade_no, {
+          transactionId,
+          paymentChannel: 'h5',
+          paidAt
+        });
+      }
     }
 
     return {
@@ -169,6 +258,20 @@ export class WeChatPayService {
     if (response.trade_state === 'SUCCESS') {
       this.runtimeDataService.markOrderPaid(orderNo, {
         transactionId: typeof response.transaction_id === 'string' ? response.transaction_id : null,
+        paidAt: typeof response.success_time === 'string' ? response.success_time : new Date().toISOString()
+      });
+    }
+  }
+
+  private async syncRechargeStatus(rechargeNo: string) {
+    const config = this.getConfig();
+    const path = `/v3/pay/transactions/out-trade-no/${encodeURIComponent(rechargeNo)}?mchid=${config.mchId}`;
+    const response = await this.requestWeChat('GET', path, undefined, config);
+
+    if (response.trade_state === 'SUCCESS') {
+      this.runtimeDataService.markRechargePaid(rechargeNo, {
+        transactionId: typeof response.transaction_id === 'string' ? response.transaction_id : null,
+        paymentChannel: 'h5',
         paidAt: typeof response.success_time === 'string' ? response.success_time : new Date().toISOString()
       });
     }

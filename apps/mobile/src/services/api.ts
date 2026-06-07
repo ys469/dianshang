@@ -96,15 +96,47 @@ export interface MemberProfile {
   defaultConsignee: string;
   contactMobile: string;
   defaultAddress: string;
+  lastCheckInAt: string | null;
+  checkinStreak: number;
 }
 
 export interface RechargePayload {
   id: string;
+  rechargeNo: string;
   amount: number;
   bonusAmount: number;
   actualAmount: number;
   balanceAfter: number;
+  paymentMethod: 'balance' | 'wechat';
+  paymentState: 'pending' | 'success' | 'failed' | 'closed';
+  paymentChannel: 'balance' | 'native' | 'h5' | null;
+  transactionId: string | null;
+  paidAt: string | null;
   createdAt: string;
+}
+
+export interface WechatRechargeSessionPayload {
+  rechargeNo: string;
+  amount: number;
+  bonusAmount: number;
+  actualAmount: number;
+  channel: 'native' | 'h5';
+  h5Url: string | null;
+  codeUrl: string | null;
+  paymentState: 'pending' | 'success' | 'failed' | 'closed';
+}
+
+export interface CheckInPayload {
+  rewardPoints: number;
+  rewardCoupons: number;
+  rewardLabel: string;
+  streak: number;
+  profile: MemberProfile;
+}
+
+export interface SupportChatPayload {
+  reply: string;
+  handoffSuggested: boolean;
 }
 
 interface ApiResponse<T> {
@@ -320,10 +352,45 @@ export const memberClient = {
     });
   },
 
+  async claimDailyCheckIn() {
+    return fetchJson<CheckInPayload>('/member/check-in', {
+      method: 'POST'
+    });
+  },
+
+  async sendSupportMessage(payload: {
+    message: string;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  }) {
+    return fetchJson<SupportChatPayload>('/member/support-chat', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
   async recharge(amount: number) {
     return fetchJson<RechargePayload>('/member/recharge', {
       method: 'POST',
       body: JSON.stringify({ amount })
+    });
+  }
+};
+
+export const paymentsClient = {
+  async createRechargeSession(payload: {
+    amount: number;
+    channel: 'native' | 'h5';
+    payerClientIp?: string;
+  }) {
+    return fetchJson<WechatRechargeSessionPayload>('/payments/wechat/recharge-session', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async getRechargeStatus(rechargeNo: string) {
+    return fetchJson<RechargePayload>(`/payments/wechat/recharges/${rechargeNo}`, {
+      method: 'GET'
     });
   }
 };

@@ -313,4 +313,112 @@ describe('/payments/wechat', () => {
     expect(checkoutSession.body.data.channel).toBe('h5');
     expect(checkoutSession.body.data.h5Url).toContain('https://wx.tenpay.com/');
   });
+
+  it('creates a recharge checkout session and only credits balance after a verified callback', async () => {
+    const profileBefore = await request(app.getHttpServer())
+      .get('/member/profile')
+      .set('Authorization', `Bearer ${memberToken}`);
+
+    expect(profileBefore.status).toBe(200);
+    const balanceBefore = profileBefore.body.data.balance as number;
+
+    fetchMock.mockResolvedValueOnce(
+      buildSignedResponse({
+        serial: 'wechat-public-key-001',
+        privateKeyPem: wechatPrivateKeyPem,
+        body: {
+          h5_url: 'https://wx.tenpay.com/cgi-bin/mmpayweb-bin/checkmweb?prepay_id=recharge-test'
+        }
+      })
+    );
+
+    const rechargeSession = await request(app.getHttpServer())
+      .post('/payments/wechat/recharge-session')
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({
+        amount: 100,
+        channel: 'h5',
+        payerClientIp: '198.51.100.31'
+      });
+
+    expect(rechargeSession.status).toBe(201);
+    expect(rechargeSession.body.data.rechargeNo).toMatch(/^RC/);
+    expect(rechargeSession.body.data.paymentState).toBe('pending');
+    expect(rechargeSession.body.data.h5Url).toContain('https://wx.tenpay.com/');
+
+    const profileAfterCreate = await request(app.getHttpServer())
+      .get('/member/profile')
+      .set('Authorization', `Bearer ${memberToken}`);
+
+    expect(profileAfterCreate.status).toBe(200);
+    expect(profileAfterCreate.body.data.balance).toBe(balanceBefore);
+
+    const rechargeResource = {
+      mchid: '1900000109',
+      appid: 'wx8888888888888888',
+      out_trade_no: rechargeSession.body.data.rechargeNo,
+      transaction_id: '4200002468202606072234567890',
+      trade_state: 'SUCCESS',
+      trade_state_desc: 'PAY_SUCCESS',
+      success_time: new Date().toISOString(),
+      amount: {
+        total: 10000,
+        payer_total: 10000,
+        currency: 'CNY'
+      }
+    };
+
+    const callbackBody = JSON.stringify({
+      id: 'notify-recharge-1',
+      create_time: new Date().toISOString(),
+      resource_type: 'encrypt-resource',
+      event_type: 'TRANSACTION.SUCCESS',
+      summary: 'recharge success',
+      resource: encryptCallbackResource(apiV3Key, rechargeResource)
+    });
+    const callbackTimestamp = Math.floor(Date.now() / 1000).toString();
+    const callbackNonce = randomBytes(12).toString('hex');
+    const callbackSignature = signMessage(
+      wechatPrivateKeyPem,
+      `${callbackTimestamp}\n${callbackNonce}\n${callbackBody}\n`
+    );
+
+    const callback = await request(app.getHttpServer())
+      .post('/payments/wechat/notify')
+      .set('Content-Type', 'application/json')
+      .set('Wechatpay-Timestamp', callbackTimestamp)
+      .set('Wechatpay-Nonce', callbackNonce)
+      .set('Wechatpay-Serial', 'wechat-public-key-001')
+      .set('Wechatpay-Signature', callbackSignature)
+      .send(callbackBody);
+
+    expect([200, 204]).toContain(callback.status);
+
+    const rechargeStatus = await request(app.getHttpServer())
+      .get(`/payments/wechat/recharges/${rechargeSession.body.data.rechargeNo}`)
+      .set('Authorization', `Bearer ${memberToken}`);
+
+    expect(rechargeStatus.status).toBe(200);
+    expect(rechargeStatus.body.data.paymentState).toBe('success');
+    expect(rechargeStatus.body.data.transactionId).toBe('4200002468202606072234567890');
+
+    const profileAfterPay = await request(app.getHttpServer())
+      .get('/member/profile')
+      .set('Authorization', `Bearer ${memberToken}`);
+
+    expect(profileAfterPay.status).toBe(200);
+    expect(profileAfterPay.body.data.balance).toBeCloseTo(balanceBefore + 110, 5);
+
+    const financeTransactions = await request(app.getHttpServer())
+      .get('/admin/finance/transactions')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(financeTransactions.status).toBe(200);
+    expect(
+      financeTransactions.body.data.some(
+        (item: { type: string; method: string; amount: number }) =>
+          item.type === '充值' && item.method === '微信支付' && item.amount === 110
+      )
+    ).toBe(true);
+  });
 });
