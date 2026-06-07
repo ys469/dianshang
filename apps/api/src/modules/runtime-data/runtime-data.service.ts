@@ -1,8 +1,12 @@
 import {
   BadRequestException,
   Injectable,
+  OnModuleDestroy,
+  OnModuleInit,
   NotFoundException
 } from '@nestjs/common';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import {
   banners as seedBanners,
   categories as seedCategories,
@@ -30,7 +34,9 @@ interface ProductRecord {
   sales: number;
   image: string;
   tags: string[];
+  listed: boolean;
   createdAt: string;
+  updatedAt: string;
 }
 
 interface OrderItemRecord {
@@ -59,6 +65,10 @@ interface OrderRecord {
   memberId: string | null;
   createdAt: string;
   cancelledAt: string | null;
+  logisticsCompany: string | null;
+  trackingNo: string | null;
+  shippedAt: string | null;
+  completedAt: string | null;
   items: OrderItemRecord[];
 }
 
@@ -126,6 +136,7 @@ interface CouponRecord {
   used: number;
   total: number;
   status: string;
+  enabled: boolean;
   createdAt: string;
 }
 
@@ -137,6 +148,7 @@ interface FlashSaleRecord {
   stock: number;
   sold: number;
   status: string;
+  enabled: boolean;
   createdAt: string;
 }
 
@@ -148,6 +160,7 @@ interface GroupBuyRecord {
   groupSize: number;
   completed: number;
   status: string;
+  enabled: boolean;
   createdAt: string;
 }
 
@@ -167,6 +180,20 @@ interface CreateProductInput {
   stock: number;
   tags?: string[];
   image?: string;
+  listed?: boolean;
+}
+
+interface UpdateProductInput {
+  categoryId?: string;
+  name?: string;
+  subtitle?: string;
+  description?: string;
+  price?: number;
+  memberPrice?: number;
+  stock?: number;
+  tags?: string[];
+  image?: string;
+  listed?: boolean;
 }
 
 interface CreateOrderInput {
@@ -178,6 +205,19 @@ interface CreateOrderInput {
   address: string;
   memberId?: string | null;
   memberLevel?: string | null;
+}
+
+interface RuntimeState {
+  products: ProductRecord[];
+  coupons: CouponRecord[];
+  flashSales: FlashSaleRecord[];
+  groupBuys: GroupBuyRecord[];
+  checkinRules: CheckinRuleRecord[];
+  orders: OrderRecord[];
+  members: MemberRecord[];
+  rechargeRecords: RechargeRecord[];
+  transactions: TransactionRecord[];
+  systemNotifications: NotificationRecord[];
 }
 
 function roundMoney(value: number) {
@@ -275,7 +315,7 @@ function getRechargeBonus(amount: number) {
 }
 
 @Injectable()
-export class RuntimeDataService {
+export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
   private readonly categories = seedCategories.map((item) => ({ ...item }));
   private readonly banners = seedBanners.map((item) => ({ ...item }));
 
@@ -284,7 +324,9 @@ export class RuntimeDataService {
     subtitle: item.subtitle ?? '',
     description: '',
     tags: [...item.tags],
-    createdAt: createIso(15)
+    listed: true,
+    createdAt: createIso(15),
+    updatedAt: createIso(15)
   }));
 
   private coupons: CouponRecord[] = this.buildSeedCoupons();
@@ -312,6 +354,14 @@ export class RuntimeDataService {
     }
   ];
 
+  onModuleInit() {
+    this.hydrateState();
+  }
+
+  onModuleDestroy() {
+    this.persistState();
+  }
+
   getCategories() {
     return this.categories.map((item) => ({ ...item }));
   }
@@ -320,28 +370,37 @@ export class RuntimeDataService {
     const featuredProductIds = new Set<string>();
 
     const flashSaleProducts = this.flashSales
-      .filter((item) => item.status === '进行中')
+      .filter((item) => item.status === '进行中' && item.enabled)
       .slice(0, 6)
       .map((activity) => {
-        featuredProductIds.add(activity.productId);
-        return this.toMarketingProductView(activity.productId, activity.price, ['秒杀']);
+        const view = this.toMarketingProductView(activity.productId, activity.price, ['秒杀']);
+        if (view) {
+          featuredProductIds.add(activity.productId);
+        }
+        return view;
       })
       .filter(Boolean);
 
     const groupBuyProducts = this.groupBuys
-      .filter((item) => item.status === '进行中')
+      .filter((item) => item.status === '进行中' && item.enabled)
       .slice(0, 6)
       .map((activity) => {
-        featuredProductIds.add(activity.productId);
-        return this.toMarketingProductView(activity.productId, activity.price, [`${activity.groupSize}人团`]);
+        const view = this.toMarketingProductView(activity.productId, activity.price, [
+          `${activity.groupSize}人团`
+        ]);
+        if (view) {
+          featuredProductIds.add(activity.productId);
+        }
+        return view;
       })
       .filter(Boolean);
 
     const memberProducts = this.products
       .filter(
         (product) =>
-          product.categoryId === 'member' ||
-          product.tags.some((tag) => tag.includes('会员'))
+          product.listed &&
+          (product.categoryId === 'member' ||
+            product.tags.some((tag) => tag.includes('会员')))
       )
       .slice(0, 6)
       .map((product) => {
@@ -350,7 +409,7 @@ export class RuntimeDataService {
       });
 
     const newArrivalProducts = this.products
-      .filter((product) => !featuredProductIds.has(product.id))
+      .filter((product) => product.listed && !featuredProductIds.has(product.id))
       .slice(0, 6)
       .map((product) => this.toProductView(product));
 
@@ -358,7 +417,7 @@ export class RuntimeDataService {
       banners: this.banners.map((item) => ({ ...item })),
       categories: this.getCategories(),
       notice: '会员折扣、在线充值、营销活动和后台订单已经全部打通。',
-      coupons: this.coupons.map((item) => ({ ...item })),
+      coupons: this.coupons.filter((item) => item.enabled).map((item) => ({ ...item })),
       sections: [
         ...(flashSaleProducts.length
           ? [
@@ -406,13 +465,13 @@ export class RuntimeDataService {
 
   getPublicProducts(categoryId?: string) {
     return this.products
-      .filter((item) => !categoryId || item.categoryId === categoryId)
+      .filter((item) => item.listed && (!categoryId || item.categoryId === categoryId))
       .map((item) => this.toProductView(item));
   }
 
   getProductDetail(id: string) {
     const product = this.products.find((item) => item.id === id);
-    return product
+    return product && product.listed
       ? this.toProductView(product)
       : {
           id,
@@ -439,6 +498,7 @@ export class RuntimeDataService {
   }
 
   createProduct(input: CreateProductInput) {
+    const timestamp = new Date().toISOString();
     const product: ProductRecord = {
       id: `p-${String(this.products.length + 1).padStart(3, '0')}`,
       categoryId: input.categoryId,
@@ -451,13 +511,68 @@ export class RuntimeDataService {
       sales: 0,
       image: input.image?.trim() || this.banners[0]?.image || '',
       tags: input.tags?.length ? uniqueTags(input.tags) : ['新品'],
-      createdAt: new Date().toISOString()
+      listed: input.listed ?? true,
+      createdAt: timestamp,
+      updatedAt: timestamp
     };
 
     this.products.unshift(product);
+    this.persistState();
     return {
       ...this.toProductView(product),
       todaySold: 0,
+      categoryName:
+        this.categories.find((item) => item.id === product.categoryId)?.name ??
+        product.categoryId
+    };
+  }
+
+  updateProduct(productId: string, input: UpdateProductInput) {
+    const product = this.products.find((item) => item.id === productId);
+    if (!product) {
+      throw new NotFoundException('商品不存在');
+    }
+
+    if (input.categoryId?.trim()) {
+      product.categoryId = input.categoryId.trim();
+    }
+    if (input.name?.trim()) {
+      product.name = input.name.trim();
+    }
+    if (input.subtitle !== undefined) {
+      product.subtitle = input.subtitle.trim();
+    }
+    if (input.description !== undefined) {
+      product.description = input.description.trim();
+    }
+    if (input.image !== undefined) {
+      product.image = input.image.trim() || product.image;
+    }
+    if (input.price !== undefined) {
+      product.price = roundMoney(input.price);
+    }
+    if (input.memberPrice !== undefined) {
+      product.memberPrice = roundMoney(input.memberPrice);
+    }
+    if (input.stock !== undefined) {
+      if (input.stock < 0) {
+        throw new BadRequestException('库存不能小于 0');
+      }
+      product.stock = Math.floor(input.stock);
+    }
+    if (input.tags !== undefined) {
+      product.tags = input.tags.length ? uniqueTags(input.tags) : [];
+    }
+    if (input.listed !== undefined) {
+      product.listed = input.listed;
+    }
+
+    product.updatedAt = new Date().toISOString();
+    this.persistState();
+
+    return {
+      ...this.toProductView(product),
+      todaySold: this.getTodaySold(product.id),
       categoryName:
         this.categories.find((item) => item.id === product.categoryId)?.name ??
         product.categoryId
@@ -476,6 +591,8 @@ export class RuntimeDataService {
     }
 
     product.stock = nextStock;
+    product.updatedAt = new Date().toISOString();
+    this.persistState();
     return {
       ...this.toProductView(product),
       todaySold: this.getTodaySold(product.id),
@@ -487,16 +604,19 @@ export class RuntimeDataService {
 
   createOrder(input: CreateOrderInput) {
     if (!input.items.length) {
-      throw new BadRequestException('????????');
+      throw new BadRequestException('下单商品不能为空');
     }
 
     const items = input.items.map(({ productId, quantity }) => {
       const product = this.products.find((item) => item.id === productId);
       if (!product) {
-        throw new NotFoundException(`?? ${productId} ???`);
+        throw new NotFoundException(`商品 ${productId} 不存在`);
       }
       if (quantity <= 0) {
-        throw new BadRequestException('???????? 0');
+        throw new BadRequestException('购买数量必须大于 0');
+      }
+      if (!product.listed) {
+        throw new BadRequestException(`${product.name} 已下架，暂时不能购买`);
       }
 
       return {
@@ -509,7 +629,7 @@ export class RuntimeDataService {
       authUserId: input.memberId ?? null,
       nickname: input.customerName,
       mobile: input.customerMobile,
-      memberLevel: input.memberLevel ?? '????'
+      memberLevel: input.memberLevel ?? '普通会员'
     });
 
     const totalAmount = roundMoney(
@@ -522,7 +642,7 @@ export class RuntimeDataService {
     const createdAt = new Date().toISOString();
 
     if (paymentMethod === 'balance' && member.balance < payableAmount) {
-      throw new BadRequestException('?????????');
+      throw new BadRequestException('账户余额不足');
     }
 
     const order: OrderRecord = {
@@ -543,6 +663,10 @@ export class RuntimeDataService {
       memberId: member.id,
       createdAt,
       cancelledAt: null,
+      logisticsCompany: null,
+      trackingNo: null,
+      shippedAt: null,
+      completedAt: null,
       items: items.map((item) => ({
         productId: item.product.id,
         productName: item.product.name,
@@ -561,6 +685,7 @@ export class RuntimeDataService {
       });
     }
 
+    this.persistState();
     return this.toAdminOrder(order);
   }
 
@@ -605,25 +730,26 @@ export class RuntimeDataService {
   setOrderPaymentChannel(orderNo: string, paymentChannel: PaymentChannel) {
     const order = this.orders.find((item) => item.orderNo === orderNo);
     if (!order) {
-      throw new NotFoundException('?????');
+      throw new NotFoundException('订单不存在');
     }
 
     order.paymentChannel = paymentChannel;
+    this.persistState();
     return this.toAdminOrder(order);
   }
 
   cancelOrder(orderNo: string) {
     const order = this.orders.find((item) => item.orderNo === orderNo);
     if (!order) {
-      throw new NotFoundException('?????');
+      throw new NotFoundException('订单不存在');
     }
 
     if (!this.canCancelOrder(order)) {
-      throw new BadRequestException('????????????????');
+      throw new BadRequestException('当前订单已超过可撤销时间');
     }
 
     if (order.paymentMethod === 'wechat' && order.paymentState === 'success') {
-      throw new BadRequestException('????????????????????????');
+      throw new BadRequestException('微信已支付订单暂不支持直接撤销');
     }
 
     if (order.paymentState === 'success') {
@@ -633,13 +759,13 @@ export class RuntimeDataService {
           authUserId: null,
           nickname: order.customerName,
           mobile: order.customerMobile,
-          memberLevel: '????'
+        memberLevel: '普通会员'
         });
 
       for (const item of order.items) {
         const product = this.products.find((entry) => entry.id === item.productId);
         if (!product) {
-          throw new NotFoundException(`?? ${item.productId} ???`);
+          throw new NotFoundException(`商品 ${item.productId} 不存在`);
         }
 
         product.stock += item.quantity;
@@ -649,8 +775,8 @@ export class RuntimeDataService {
         if (flashSale) {
           flashSale.stock += item.quantity;
           flashSale.sold = Math.max(0, flashSale.sold - item.quantity);
-          if (flashSale.stock > 0 && flashSale.status !== '?????') {
-            flashSale.status = '?????';
+          if (flashSale.stock > 0 && flashSale.enabled) {
+            flashSale.status = '进行中';
           }
         }
 
@@ -691,6 +817,7 @@ export class RuntimeDataService {
     order.paymentState = 'closed';
     order.status = '\u5df2\u53d6\u6d88';
     order.cancelledAt = new Date().toISOString();
+    this.persistState();
 
     return this.toAdminOrder(order);
   }
@@ -705,7 +832,7 @@ export class RuntimeDataService {
   ) {
     const order = this.orders.find((item) => item.orderNo === orderNo);
     if (!order) {
-      throw new NotFoundException('?????');
+      throw new NotFoundException('订单不存在');
     }
 
     if (order.paymentState === 'closed') {
@@ -722,22 +849,22 @@ export class RuntimeDataService {
         authUserId: null,
         nickname: order.customerName,
         mobile: order.customerMobile,
-        memberLevel: '????'
+        memberLevel: '普通会员'
       });
 
     const productItems = order.items.map((item) => {
       const product = this.products.find((entry) => entry.id === item.productId);
       if (!product) {
-        throw new NotFoundException(`?? ${item.productId} ???`);
+        throw new NotFoundException(`商品 ${item.productId} 不存在`);
       }
       if (product.stock < item.quantity) {
-        throw new BadRequestException(`${product.name} ????`);
+        throw new BadRequestException(`${product.name} 库存不足`);
       }
       return { item, product };
     });
 
     if (order.paymentMethod === 'balance' && member.balance < order.payableAmount) {
-      throw new BadRequestException('?????????');
+      throw new BadRequestException('账户余额不足');
     }
 
     for (const { item, product } of productItems) {
@@ -745,18 +872,18 @@ export class RuntimeDataService {
       product.sales += item.quantity;
 
       const flashSale = this.flashSales.find(
-        (activity) => activity.productId === product.id && activity.status === '?????'
+        (activity) => activity.productId === product.id && activity.status === '进行中'
       );
       if (flashSale) {
         flashSale.stock = Math.max(0, flashSale.stock - item.quantity);
         flashSale.sold += item.quantity;
         if (flashSale.stock === 0) {
-          flashSale.status = '?????';
+          flashSale.status = '已售罄';
         }
       }
 
       const groupBuy = this.groupBuys.find(
-        (activity) => activity.productId === product.id && activity.status === '?????'
+        (activity) => activity.productId === product.id && activity.status === '进行中'
       );
       if (groupBuy) {
         groupBuy.completed += Math.max(1, Math.ceil(item.quantity / groupBuy.groupSize));
@@ -806,6 +933,7 @@ export class RuntimeDataService {
       });
     }
 
+    this.persistState();
     return this.toAdminOrder(order);
   }
 
@@ -891,6 +1019,7 @@ export class RuntimeDataService {
       member.coupons = nextCoupons;
     }
 
+    this.persistState();
     return this.toAdminMember(member);
   }
 
@@ -952,6 +1081,7 @@ export class RuntimeDataService {
     member.contactMobile = contactMobile;
     member.defaultAddress = defaultAddress;
 
+    this.persistState();
     return this.toMemberProfile(member);
   }
 
@@ -1004,6 +1134,7 @@ export class RuntimeDataService {
       detail: `${member.nickname} 连续签到 ${nextStreak} 天，奖励 ${rewardText}`
     });
 
+    this.persistState();
     return {
       rewardPoints,
       rewardCoupons,
@@ -1056,6 +1187,7 @@ export class RuntimeDataService {
     };
 
     this.rechargeRecords.unshift(recharge);
+    this.persistState();
 
     return this.toRechargeView(recharge);
   }
@@ -1106,6 +1238,7 @@ export class RuntimeDataService {
       detail: `${member.nickname} \u5145\u503c ${recharge.amount} \u5143\uff0c\u5230\u8d26 ${recharge.actualAmount} \u5143`
     });
 
+    this.persistState();
     return this.toRechargeView(recharge);
   }
 
@@ -1282,10 +1415,42 @@ export class RuntimeDataService {
       used: 0,
       total: Math.max(1, Math.floor(input.total)),
       status: '进行中',
+      enabled: true,
       createdAt: new Date().toISOString()
     };
 
     this.coupons.unshift(coupon);
+    this.persistState();
+    return { ...coupon };
+  }
+
+  updateCoupon(
+    couponId: string,
+    input: { enabled?: boolean; title?: string; threshold?: number; discount?: number; total?: number }
+  ) {
+    const coupon = this.coupons.find((item) => item.id === couponId);
+    if (!coupon) {
+      throw new NotFoundException('优惠券不存在');
+    }
+
+    if (input.title?.trim()) {
+      coupon.title = input.title.trim();
+    }
+    if (input.threshold !== undefined) {
+      coupon.threshold = roundMoney(input.threshold);
+    }
+    if (input.discount !== undefined) {
+      coupon.discount = roundMoney(input.discount);
+    }
+    if (input.total !== undefined) {
+      coupon.total = Math.max(coupon.used, Math.floor(input.total));
+    }
+    if (input.enabled !== undefined) {
+      coupon.enabled = input.enabled;
+    }
+
+    coupon.status = coupon.enabled ? '进行中' : '已暂停';
+    this.persistState();
     return { ...coupon };
   }
 
@@ -1316,13 +1481,52 @@ export class RuntimeDataService {
       stock: Math.max(1, Math.floor(input.stock)),
       sold: 0,
       status: '进行中',
+      enabled: true,
       createdAt: new Date().toISOString()
     };
 
     this.flashSales.unshift(flashSale);
+    this.persistState();
     return {
       ...flashSale,
       productName: product.name
+    };
+  }
+
+  updateFlashSale(
+    flashSaleId: string,
+    input: { enabled?: boolean; title?: string; price?: number; stock?: number }
+  ) {
+    const flashSale = this.flashSales.find((item) => item.id === flashSaleId);
+    if (!flashSale) {
+      throw new NotFoundException('秒杀活动不存在');
+    }
+
+    if (input.title?.trim()) {
+      flashSale.title = input.title.trim();
+    }
+    if (input.price !== undefined) {
+      flashSale.price = roundMoney(input.price);
+    }
+    if (input.stock !== undefined) {
+      flashSale.stock = Math.max(0, Math.floor(input.stock));
+    }
+    if (input.enabled !== undefined) {
+      flashSale.enabled = input.enabled;
+    }
+
+    flashSale.status = !flashSale.enabled
+      ? '已暂停'
+      : flashSale.stock > 0
+        ? '进行中'
+        : '已售罄';
+
+    this.persistState();
+    return {
+      ...flashSale,
+      productName:
+        this.products.find((product) => product.id === flashSale.productId)?.name ??
+        flashSale.productId
     };
   }
 
@@ -1353,14 +1557,111 @@ export class RuntimeDataService {
       groupSize: Math.max(2, Math.floor(input.groupSize)),
       completed: 0,
       status: '进行中',
+      enabled: true,
       createdAt: new Date().toISOString()
     };
 
     this.groupBuys.unshift(groupBuy);
+    this.persistState();
     return {
       ...groupBuy,
       productName: product.name
     };
+  }
+
+  updateGroupBuy(
+    groupBuyId: string,
+    input: { enabled?: boolean; title?: string; price?: number; groupSize?: number }
+  ) {
+    const groupBuy = this.groupBuys.find((item) => item.id === groupBuyId);
+    if (!groupBuy) {
+      throw new NotFoundException('拼团活动不存在');
+    }
+
+    if (input.title?.trim()) {
+      groupBuy.title = input.title.trim();
+    }
+    if (input.price !== undefined) {
+      groupBuy.price = roundMoney(input.price);
+    }
+    if (input.groupSize !== undefined) {
+      groupBuy.groupSize = Math.max(2, Math.floor(input.groupSize));
+    }
+    if (input.enabled !== undefined) {
+      groupBuy.enabled = input.enabled;
+    }
+
+    groupBuy.status = groupBuy.enabled ? '进行中' : '已暂停';
+    this.persistState();
+    return {
+      ...groupBuy,
+      productName:
+        this.products.find((product) => product.id === groupBuy.productId)?.name ??
+        groupBuy.productId
+    };
+  }
+
+  updateOrderStatus(
+    orderNo: string,
+    input: {
+      action: 'ship' | 'complete' | 'cancel';
+      logisticsCompany?: string;
+      trackingNo?: string;
+    }
+  ) {
+    if (input.action === 'cancel') {
+      return this.cancelOrder(orderNo);
+    }
+
+    const order = this.orders.find((item) => item.orderNo === orderNo);
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+
+    if (order.paymentState !== 'success') {
+      throw new BadRequestException('订单未支付，暂时不能执行该操作');
+    }
+
+    if (order.status === '已取消') {
+      throw new BadRequestException('已取消订单不能继续处理');
+    }
+
+    if (input.action === 'ship') {
+      if (order.fulfillmentMode !== 'delivery') {
+        throw new BadRequestException('仅配送订单支持发货');
+      }
+      if (order.status !== '待发货') {
+        throw new BadRequestException('当前订单状态不能发货');
+      }
+
+      const logisticsCompany = input.logisticsCompany?.trim();
+      const trackingNo = input.trackingNo?.trim();
+
+      if (!logisticsCompany || !trackingNo) {
+        throw new BadRequestException('发货时必须填写物流公司和运单号');
+      }
+
+      order.status = '待收货';
+      order.logisticsCompany = logisticsCompany;
+      order.trackingNo = trackingNo;
+      order.shippedAt = new Date().toISOString();
+    }
+
+    if (input.action === 'complete') {
+      if (!['待收货', '待提货', '待发货'].includes(order.status)) {
+        throw new BadRequestException('当前订单状态不能完成');
+      }
+
+      if (order.fulfillmentMode === 'delivery' && order.status === '待发货') {
+        throw new BadRequestException('配送订单需先发货后再完成');
+      }
+
+      order.status = '已完成';
+      order.completedAt = new Date().toISOString();
+    }
+
+    this.persistState();
+    return this.toAdminOrder(order);
   }
 
   getCheckinRules() {
@@ -1380,6 +1681,7 @@ export class RuntimeDataService {
       }))
       .sort((left, right) => left.day - right.day);
 
+    this.persistState();
     return this.getCheckinRules();
   }
 
@@ -1427,6 +1729,7 @@ export class RuntimeDataService {
     };
 
     this.members.unshift(member);
+    this.persistState();
     return member;
   }
 
@@ -1436,6 +1739,7 @@ export class RuntimeDataService {
       used: [156, 89][index] ?? 0,
       total: [500, 200][index] ?? 300,
       status: '进行中',
+      enabled: true,
       createdAt: createIso(index + 2)
     }));
   }
@@ -1450,6 +1754,7 @@ export class RuntimeDataService {
         stock: 50,
         sold: 38,
         status: '进行中',
+        enabled: true,
         createdAt: createIso(1)
       },
       {
@@ -1460,6 +1765,7 @@ export class RuntimeDataService {
         stock: 100,
         sold: 72,
         status: '进行中',
+        enabled: true,
         createdAt: createIso(0)
       }
     ];
@@ -1475,6 +1781,7 @@ export class RuntimeDataService {
         groupSize: 3,
         completed: 12,
         status: '进行中',
+        enabled: true,
         createdAt: createIso(2)
       },
       {
@@ -1485,6 +1792,7 @@ export class RuntimeDataService {
         groupSize: 5,
         completed: 8,
         status: '进行中',
+        enabled: true,
         createdAt: createIso(1)
       }
     ];
@@ -1529,15 +1837,19 @@ export class RuntimeDataService {
         fulfillmentMode: order.fulfillmentMode === 'pickup' ? 'pickup' : 'delivery',
         totalAmount: order.totalAmount,
         payableAmount: order.payableAmount,
-        customerName: '???????',
+        customerName: '星选会员',
         customerMobile: '13800138000',
         address:
           order.fulfillmentMode === 'pickup'
-            ? '??????????????????'
-            : '??????????????? 88 ??????????',
+            ? '上海市浦东新区张江路 88 号 星选生活馆自提点'
+            : '上海市浦东新区张江路 88 号 星选生活馆 601 室',
         memberId: 'u-001',
         createdAt: createIso(index),
         cancelledAt: null,
+        logisticsCompany: null,
+        trackingNo: null,
+        shippedAt: null,
+        completedAt: paymentState === 'success' && order.fulfillmentMode !== 'pickup' ? createIso(index) : null,
         items
       } satisfies OrderRecord;
     });
@@ -1636,6 +1948,112 @@ export class RuntimeDataService {
     return Date.now() <= deadline;
   }
 
+  private hydrateState() {
+    const filePath = this.getRuntimeStateFilePath();
+    if (!existsSync(filePath)) {
+      return;
+    }
+
+    try {
+      const raw = readFileSync(filePath, 'utf8');
+      if (!raw.trim()) {
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as Partial<RuntimeState>;
+
+      if (parsed.products?.length) {
+        this.products = parsed.products.map((item) => ({
+          ...item,
+          subtitle: item.subtitle ?? '',
+          description: item.description ?? '',
+          tags: [...(item.tags ?? [])],
+          listed: item.listed ?? true,
+          createdAt: item.createdAt ?? new Date().toISOString(),
+          updatedAt: item.updatedAt ?? item.createdAt ?? new Date().toISOString()
+        }));
+      }
+
+      if (parsed.coupons) {
+        this.coupons = parsed.coupons.map((item) => ({
+          ...item,
+          enabled: item.enabled ?? item.status !== '已暂停'
+        }));
+      }
+
+      if (parsed.flashSales) {
+        this.flashSales = parsed.flashSales.map((item) => ({
+          ...item,
+          enabled: item.enabled ?? item.status !== '已暂停'
+        }));
+      }
+
+      if (parsed.groupBuys) {
+        this.groupBuys = parsed.groupBuys.map((item) => ({
+          ...item,
+          enabled: item.enabled ?? item.status !== '已暂停'
+        }));
+      }
+
+      if (parsed.checkinRules?.length) {
+        this.checkinRules = parsed.checkinRules.map((item) => ({ ...item }));
+      }
+
+      if (parsed.orders) {
+        this.orders = parsed.orders.map((item) => ({
+          ...item,
+          logisticsCompany: item.logisticsCompany ?? null,
+          trackingNo: item.trackingNo ?? null,
+          shippedAt: item.shippedAt ?? null,
+          completedAt: item.completedAt ?? null,
+          items: item.items.map((orderItem) => ({ ...orderItem }))
+        }));
+      }
+
+      if (parsed.members) {
+        this.members = parsed.members.map((item) => ({ ...item }));
+      }
+
+      if (parsed.rechargeRecords) {
+        this.rechargeRecords = parsed.rechargeRecords.map((item) => ({ ...item }));
+      }
+
+      if (parsed.transactions) {
+        this.transactions = parsed.transactions.map((item) => ({ ...item }));
+      }
+
+      if (parsed.systemNotifications) {
+        this.systemNotifications = parsed.systemNotifications.map((item) => ({ ...item }));
+      }
+    } catch {
+      // Ignore malformed persisted data and keep seeded defaults.
+    }
+  }
+
+  private persistState() {
+    const filePath = this.getRuntimeStateFilePath();
+    mkdirSync(dirname(filePath), { recursive: true });
+
+    const state: RuntimeState = {
+      products: this.products,
+      coupons: this.coupons,
+      flashSales: this.flashSales,
+      groupBuys: this.groupBuys,
+      checkinRules: this.checkinRules,
+      orders: this.orders,
+      members: this.members,
+      rechargeRecords: this.rechargeRecords,
+      transactions: this.transactions,
+      systemNotifications: this.systemNotifications
+    };
+
+    writeFileSync(filePath, JSON.stringify(state, null, 2), 'utf8');
+  }
+
+  private getRuntimeStateFilePath() {
+    return resolve(process.env.RUNTIME_DATA_FILE ?? 'apps/api/runtime/runtime-data.json');
+  }
+
   private toProductView(product: ProductRecord) {
     return {
       id: product.id,
@@ -1648,13 +2066,15 @@ export class RuntimeDataService {
       stock: product.stock,
       sales: product.sales,
       image: product.image,
-      tags: [...product.tags]
+      tags: [...product.tags],
+      listed: product.listed,
+      updatedAt: product.updatedAt
     };
   }
 
   private toMarketingProductView(productId: string, memberPrice: number, extraTags: string[]) {
     const product = this.products.find((item) => item.id === productId);
-    if (!product) {
+    if (!product || !product.listed) {
       return null;
     }
 
@@ -1689,6 +2109,10 @@ export class RuntimeDataService {
       createdAt: order.createdAt,
       cancelDeadlineAt,
       cancelledAt: order.cancelledAt,
+      logisticsCompany: order.logisticsCompany,
+      trackingNo: order.trackingNo,
+      shippedAt: order.shippedAt,
+      completedAt: order.completedAt,
       canCancel: this.canCancelOrder(order),
       itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
       itemSummary: order.items

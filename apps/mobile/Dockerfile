@@ -9,6 +9,9 @@ RUN npm ci
 ARG VITE_API_BASE_URL=https://api.example.com
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
+ARG VITE_ADMIN_BASE_URL=https://admin.huakaibuxie.online
+ENV VITE_ADMIN_BASE_URL=${VITE_ADMIN_BASE_URL}
+
 RUN npm run build:mobile
 
 FROM nginx:1.27-alpine

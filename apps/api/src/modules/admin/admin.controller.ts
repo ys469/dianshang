@@ -46,9 +46,30 @@ export class AdminController {
       tags?: string[];
       image?: string;
       description?: string;
+      listed?: boolean;
     }
   ) {
     return ok(this.runtimeDataService.createProduct(body), 'product created');
+  }
+
+  @Patch('products/:id')
+  updateProduct(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      categoryId?: string;
+      name?: string;
+      subtitle?: string;
+      description?: string;
+      image?: string;
+      price?: number;
+      memberPrice?: number;
+      stock?: number;
+      tags?: string[];
+      listed?: boolean;
+    }
+  ) {
+    return ok(this.runtimeDataService.updateProduct(id, body), 'product updated');
   }
 
   @Patch('products/:id/stock')
@@ -59,6 +80,19 @@ export class AdminController {
   @Get('orders')
   getOrders() {
     return ok(this.runtimeDataService.getAdminOrders());
+  }
+
+  @Patch('orders/:orderNo/status')
+  updateOrderStatus(
+    @Param('orderNo') orderNo: string,
+    @Body()
+    body: {
+      action: 'ship' | 'complete' | 'cancel';
+      logisticsCompany?: string;
+      trackingNo?: string;
+    }
+  ) {
+    return ok(this.runtimeDataService.updateOrderStatus(orderNo, body), 'order updated');
   }
 
   @Get('users')

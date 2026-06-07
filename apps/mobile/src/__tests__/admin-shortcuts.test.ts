@@ -11,14 +11,14 @@ const { getOrdersMock, getProfileMock, loginMock } = vi.hoisted(() => ({
     user: {
       id: role === 'admin' ? 'admin-1' : 'user-1',
       role,
-      nickname: role === 'admin' ? '运营管理员' : '正式会员',
+      nickname: role === 'admin' ? 'Admin Ops' : 'Member User',
       mobile: role === 'user' ? account : '',
       memberLevel: role === 'user' ? 'Gold' : 'Admin'
     }
   })),
   getProfileMock: vi.fn(async (): Promise<MemberProfile> => ({
     id: 'user-1',
-    nickname: '正式会员',
+    nickname: 'Member User',
     mobile: '13800138000',
     memberLevel: 'Gold',
     balance: 0,
@@ -28,7 +28,7 @@ const { getOrdersMock, getProfileMock, loginMock } = vi.hoisted(() => ({
     totalOrders: 0,
     totalSpent: 0,
     lastOrderAt: null,
-    defaultConsignee: '正式会员',
+    defaultConsignee: 'Member User',
     contactMobile: '13800138000',
     defaultAddress: 'Shanghai Pudong'
   })),
@@ -106,9 +106,18 @@ describe('admin shortcut state', () => {
 });
 
 describe('admin shortcut template wiring', () => {
-  it('wires shortcut buttons to the admin shortcut click handler', () => {
+  it('wires shortcut buttons to the real admin module jump handler', () => {
     const appVue = readFileSync(resolve(__dirname, '../h5-preview/App.vue'), 'utf8');
 
-    expect(appVue).toContain('@click="handleAdminShortcut');
+    expect(appVue).toContain('@click="handleOpenAdminModule(item.key)"');
+  });
+
+  it('surfaces a clear entry to the real admin console and maps module links', () => {
+    const appVue = readFileSync(resolve(__dirname, '../h5-preview/App.vue'), 'utf8');
+
+    expect(appVue).toContain('admin-console-panel');
+    expect(appVue).toContain('handleOpenAdminConsole');
+    expect(appVue).toContain('handleOpenAdminModule(item.key)');
+    expect(appVue).toContain('buildAdminConsoleUrl');
   });
 });

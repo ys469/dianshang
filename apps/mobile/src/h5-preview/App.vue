@@ -276,9 +276,52 @@ const adminStats = computed(() => [
   { label: '消息提醒', value: `${unreadMessages.value}` }
 ]);
 
+const adminModuleRoutes: Record<AdminShortcutKey, string> = {
+  products: '/products',
+  members: '/members',
+  orders: '/orders',
+  marketing: '/marketing',
+  finance: '/finance',
+  notifications: '/notifications'
+};
+
 const selectedCategoryLabel = computed(
   () => categories.value.find((item) => item.id === selectedCategoryId.value)?.name ?? '全部商品'
 );
+
+const adminConsoleBaseUrl = computed(() => {
+  const configuredUrl = import.meta.env.VITE_ADMIN_BASE_URL?.trim();
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/$/, '');
+  }
+
+  if (typeof window === 'undefined') {
+    return 'https://admin.huakaibuxie.online';
+  }
+
+  const { protocol, hostname } = window.location;
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return `${protocol}//${hostname}:5173`;
+  }
+
+  if (
+    hostname === 'huakaibuxie.online' ||
+    hostname === 'www.huakaibuxie.online' ||
+    hostname === 'm.huakaibuxie.online'
+  ) {
+    return 'https://admin.huakaibuxie.online';
+  }
+
+  return `${protocol}//${hostname}:8081`;
+});
+
+const adminConsoleLabel = computed(() =>
+  adminConsoleBaseUrl.value.replace(/^https?:\/\//, '')
+);
+
+function buildAdminConsoleUrl(shortcut: AdminShortcutKey = 'products') {
+  return `${adminConsoleBaseUrl.value}/#${adminModuleRoutes[shortcut]}`;
+}
 
 const panelTitle = computed(() => {
   switch (activePanel.value) {
@@ -470,6 +513,26 @@ async function handleCancelOrder(orderNo: string) {
 
 function handleAdminShortcut(shortcut: AdminShortcutKey) {
   mallStore.openAdminShortcut(shortcut);
+}
+
+function openExternalLink(url: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const openedWindow = window.open(url, '_blank', 'noopener,noreferrer');
+  if (!openedWindow) {
+    window.location.href = url;
+  }
+}
+
+function handleOpenAdminConsole() {
+  openExternalLink(buildAdminConsoleUrl(activeAdminShortcut.value ?? 'products'));
+}
+
+function handleOpenAdminModule(shortcut: AdminShortcutKey) {
+  handleAdminShortcut(shortcut);
+  openExternalLink(buildAdminConsoleUrl(shortcut));
 }
 
 function validateMobile(value: string) {
@@ -847,10 +910,31 @@ function handleLogout(nextRole: LoginRole = 'user') {
           </article>
         </section>
 
+        <section class="section-block admin-console-panel">
+          <div class="section-head compact">
+            <div>
+              <h2>进入真实运营后台</h2>
+              <span>商品、订单、会员、营销等操作都会跳转到正式后台执行</span>
+            </div>
+          </div>
+          <p class="admin-console-copy">
+            当前页面用于快速查看概览，真正可操作的后台位于
+            <strong>{{ adminConsoleLabel }}</strong>
+          </p>
+          <div class="admin-console-actions">
+            <button type="button" class="primary-button" @click="handleOpenAdminConsole">
+              进入真实运营后台
+            </button>
+            <button type="button" class="ghost-button" @click="handleOpenAdminModule('products')">
+              直接打开商品管理
+            </button>
+          </div>
+        </section>
+
         <section class="section-block">
           <div class="section-head">
             <h2>后台模块</h2>
-            <span>使用桌面端管理后台可查看完整数据表</span>
+            <span>点击后会跳转到真实后台的对应管理页面</span>
           </div>
           <div class="shortcut-grid">
             <button
@@ -859,10 +943,11 @@ function handleLogout(nextRole: LoginRole = 'user') {
               type="button"
               class="shortcut-card"
               :class="{ active: activeAdminShortcut === item.key }"
-              @click="handleAdminShortcut(item.key)"
+              @click="handleOpenAdminModule(item.key)"
             >
               <strong>{{ item.label }}</strong>
               <span>{{ item.description }}</span>
+              <small>进入 {{ item.label }}</small>
             </button>
           </div>
         </section>
@@ -1410,7 +1495,8 @@ p {
 .stat-card span,
 .field span,
 .auth-notice p,
-.empty-state p {
+.empty-state p,
+.admin-console-copy {
   color: #667085;
   font-size: 13px;
 }
@@ -1987,6 +2073,12 @@ p {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.admin-console-panel,
+.admin-console-actions {
+  display: grid;
+  gap: 12px;
+}
+
 .shortcut-card {
   display: grid;
   gap: 8px;
@@ -2000,6 +2092,12 @@ p {
 .shortcut-card span {
   font-size: 12px;
   color: #6b7280;
+}
+
+.shortcut-card small {
+  color: #7c4dff;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .shortcut-card.active {

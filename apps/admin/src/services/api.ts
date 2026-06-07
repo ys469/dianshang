@@ -21,12 +21,19 @@ export interface AdminProduct {
   sales: number;
   todaySold: number;
   tags: string[];
+  listed: boolean;
+  updatedAt: string;
 }
 
 export interface AdminOrder {
   id: string;
   orderNo: string;
   status: string;
+  paymentMethod: 'balance' | 'wechat';
+  paymentState: 'pending' | 'success' | 'failed' | 'closed';
+  paymentChannel: 'balance' | 'native' | 'h5' | null;
+  transactionId: string | null;
+  paidAt: string | null;
   fulfillmentMode: string;
   payableAmount: number;
   totalAmount: number;
@@ -34,8 +41,22 @@ export interface AdminOrder {
   customerMobile: string;
   address: string;
   createdAt: string;
+  cancelDeadlineAt: string;
+  cancelledAt: string | null;
+  canCancel: boolean;
+  logisticsCompany: string | null;
+  trackingNo: string | null;
+  shippedAt: string | null;
+  completedAt: string | null;
   itemCount: number;
   itemSummary: string;
+  items: Array<{
+    productId: string;
+    productName: string;
+    quantity: number;
+    price: number;
+    memberPrice: number;
+  }>;
 }
 
 export interface AdminMember {
@@ -96,6 +117,7 @@ export interface CouponItem {
   used: number;
   total: number;
   status: string;
+  enabled: boolean;
   createdAt: string;
 }
 
@@ -108,6 +130,7 @@ export interface FlashSaleItem {
   stock: number;
   sold: number;
   status: string;
+  enabled: boolean;
   createdAt: string;
 }
 
@@ -120,6 +143,7 @@ export interface GroupBuyItem {
   groupSize: number;
   completed: number;
   status: string;
+  enabled: boolean;
   createdAt: string;
 }
 
@@ -139,6 +163,20 @@ export interface CreateProductInput {
   memberPrice: number;
   stock: number;
   tags: string[];
+  listed?: boolean;
+}
+
+export interface UpdateProductInput {
+  categoryId?: string;
+  name?: string;
+  subtitle?: string;
+  description?: string;
+  image?: string;
+  price?: number;
+  memberPrice?: number;
+  stock?: number;
+  tags?: string[];
+  listed?: boolean;
 }
 
 export interface AuthUser {
@@ -245,6 +283,13 @@ export const apiClient = {
     });
   },
 
+  updateProduct(productId: string, payload: UpdateProductInput) {
+    return fetchJson<AdminProduct>(`/admin/products/${productId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+  },
+
   updateProductStock(productId: string, delta: number) {
     return fetchJson<AdminProduct>(`/admin/products/${productId}/stock`, {
       method: 'PATCH',
@@ -254,6 +299,20 @@ export const apiClient = {
 
   getOrders() {
     return fetchJson<AdminOrder[]>('/admin/orders');
+  },
+
+  updateOrderStatus(
+    orderNo: string,
+    payload: {
+      action: 'ship' | 'complete' | 'cancel';
+      logisticsCompany?: string;
+      trackingNo?: string;
+    }
+  ) {
+    return fetchJson<AdminOrder>(`/admin/orders/${orderNo}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
   },
 
   getMembers() {
@@ -309,6 +368,22 @@ export const apiClient = {
     });
   },
 
+  updateCoupon(
+    couponId: string,
+    payload: {
+      title?: string;
+      threshold?: number;
+      discount?: number;
+      total?: number;
+      enabled?: boolean;
+    }
+  ) {
+    return fetchJson<CouponItem>(`/admin/marketing/coupons/${couponId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+  },
+
   getFlashSales() {
     return fetchJson<FlashSaleItem[]>('/admin/marketing/flash-sales');
   },
@@ -325,6 +400,21 @@ export const apiClient = {
     });
   },
 
+  updateFlashSale(
+    flashSaleId: string,
+    payload: {
+      title?: string;
+      price?: number;
+      stock?: number;
+      enabled?: boolean;
+    }
+  ) {
+    return fetchJson<FlashSaleItem>(`/admin/marketing/flash-sales/${flashSaleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+  },
+
   getGroupBuys() {
     return fetchJson<GroupBuyItem[]>('/admin/marketing/group-buys');
   },
@@ -337,6 +427,21 @@ export const apiClient = {
   }) {
     return fetchJson<GroupBuyItem>('/admin/marketing/group-buys', {
       method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  updateGroupBuy(
+    groupBuyId: string,
+    payload: {
+      title?: string;
+      price?: number;
+      groupSize?: number;
+      enabled?: boolean;
+    }
+  ) {
+    return fetchJson<GroupBuyItem>(`/admin/marketing/group-buys/${groupBuyId}`, {
+      method: 'PATCH',
       body: JSON.stringify(payload)
     });
   },
