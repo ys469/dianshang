@@ -93,9 +93,15 @@ export interface LoginPayload {
   password: string;
 }
 
+export interface SmsLoginPayload {
+  mobile: string;
+  smsCode: string;
+}
+
 export interface RegisterPayload {
   mobile: string;
   nickname: string;
+  smsCode?: string;
   password: string;
   confirmPassword: string;
 }
@@ -333,17 +339,21 @@ export const useDemoMallStore = defineStore('demo-mall', {
           role: LoginRole;
         };
 
+        if (user.role === 'admin') {
+          this.logout();
+          this.feedbackMessage = '管理员请前往独立后台登录';
+          return createResult(false, this.feedbackMessage);
+        }
+
         this.isAuthenticated = true;
         this.currentRole = user.role;
         this.currentUserName = user.nickname;
         this.currentUserMobile = user.mobile ?? '';
         this.defaultConsignee = user.nickname;
         this.contactMobile = user.mobile ?? '';
-        this.activeAdminShortcut = user.role === 'admin' ? 'products' : null;
+        this.activeAdminShortcut = null;
 
-        if (user.role === 'user') {
-          await this.syncMemberData();
-        }
+        await this.syncMemberData();
 
         return createResult(true, '已恢复登录状态');
       } catch (error) {
@@ -356,6 +366,12 @@ export const useDemoMallStore = defineStore('demo-mall', {
     },
 
     async login(payload: LoginPayload) {
+      if (payload.role === 'admin') {
+        this.logout();
+        this.feedbackMessage = '管理员请前往独立后台登录';
+        return createResult(false, this.feedbackMessage);
+      }
+
       try {
         const result = await authClient.login(payload.role, payload.account, payload.password);
         this.isAuthenticated = true;
@@ -364,18 +380,13 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.currentUserMobile = result.user.mobile ?? payload.account;
         this.defaultConsignee = result.user.nickname;
         this.contactMobile = result.user.mobile ?? payload.account;
-        this.activeAdminShortcut = payload.role === 'admin' ? 'products' : null;
+        this.activeAdminShortcut = null;
         setStorageItem(TOKEN_KEY, result.token);
         setStorageItem(USER_KEY, JSON.stringify(result.user));
 
-        if (payload.role === 'user') {
-          await this.syncMemberData().catch(() => undefined);
-        }
+        await this.syncMemberData().catch(() => undefined);
 
-        this.feedbackMessage =
-          payload.role === 'admin'
-            ? '\u7ba1\u7406\u5458\u767b\u5f55\u6210\u529f\uff0c\u5df2\u8fdb\u5165\u8fd0\u8425\u540e\u53f0'
-            : '\u4f1a\u5458\u767b\u5f55\u6210\u529f\uff0c\u6b22\u8fce\u56de\u6765';
+        this.feedbackMessage = '\u4f1a\u5458\u767b\u5f55\u6210\u529f\uff0c\u6b22\u8fce\u56de\u6765';
         return createResult(true, this.feedbackMessage);
       } catch (error) {
         this.isAuthenticated = false;
@@ -389,11 +400,28 @@ export const useDemoMallStore = defineStore('demo-mall', {
         removeStorageItem(TOKEN_KEY);
         removeStorageItem(USER_KEY);
         this.feedbackMessage =
-          error instanceof Error
-            ? error.message
-            : payload.role === 'admin'
-              ? '\u7ba1\u7406\u5458\u8d26\u53f7\u6216\u5bc6\u7801\u9519\u8bef'
-              : '\u624b\u673a\u53f7\u6216\u5bc6\u7801\u9519\u8bef';
+          error instanceof Error ? error.message : '\u624b\u673a\u53f7\u6216\u5bc6\u7801\u9519\u8bef';
+        return createResult(false, this.feedbackMessage);
+      }
+    },
+
+    async smsLogin(payload: SmsLoginPayload) {
+      try {
+        const result = await authClient.smsLogin(payload.mobile, payload.smsCode);
+        this.isAuthenticated = true;
+        this.currentRole = 'user';
+        this.currentUserName = result.user.nickname;
+        this.currentUserMobile = result.user.mobile ?? payload.mobile;
+        this.defaultConsignee = result.user.nickname;
+        this.contactMobile = result.user.mobile ?? payload.mobile;
+        this.activeAdminShortcut = null;
+        setStorageItem(TOKEN_KEY, result.token);
+        setStorageItem(USER_KEY, JSON.stringify(result.user));
+        await this.syncMemberData().catch(() => undefined);
+        this.feedbackMessage = '会员登录成功，欢迎回来';
+        return createResult(true, this.feedbackMessage);
+      } catch (error) {
+        this.feedbackMessage = error instanceof Error ? error.message : '验证码登录失败';
         return createResult(false, this.feedbackMessage);
       }
     },
@@ -404,7 +432,8 @@ export const useDemoMallStore = defineStore('demo-mall', {
           payload.mobile,
           payload.nickname,
           payload.password,
-          payload.confirmPassword
+          payload.confirmPassword,
+          payload.smsCode
         );
 
         this.isAuthenticated = true;
@@ -442,7 +471,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
       }
     },
 
-    async sendSmsCode(mobile: string, scene: 'register' | 'reset_password') {
+    async sendSmsCode(mobile: string, scene: 'register' | 'reset_password' | 'login') {
       try {
         const result = await authClient.sendSmsCode(mobile, scene);
         this.feedbackMessage =

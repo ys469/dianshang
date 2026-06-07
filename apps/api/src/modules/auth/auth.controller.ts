@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Inject, Post, UseGuards } from '@nestj
 import { ok } from '../../common/api-response';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
-import { LoginDto, RegisterDto, ResetPasswordDto, SendSmsCodeDto } from './auth.dto';
+import { LoginDto, RegisterDto, ResetPasswordDto, SendSmsCodeDto, SmsLoginDto } from './auth.dto';
 import { AuthService } from './auth.service';
 
 @Controller('auth')
@@ -13,6 +13,12 @@ export class AuthController {
   @HttpCode(200)
   async login(@Body() body: LoginDto) {
     return ok(await this.authService.login(body));
+  }
+
+  @Post('sms-login')
+  @HttpCode(200)
+  async smsLogin(@Body() body: SmsLoginDto) {
+    return ok(await this.authService.smsLogin(body));
   }
 
   @Post('send-sms-code')

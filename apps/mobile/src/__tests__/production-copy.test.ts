@@ -30,6 +30,39 @@ describe('production-facing copy', () => {
     expect(source).not.toContain('会员测试账号');
     expect(source).not.toContain('开发验证码');
   });
+
+  it('keeps register verification UI and exposes sms login for members', () => {
+    const mobileLoginSource = readFileSync(resolve(mobileRoot, 'src/pages/login/index.vue'), 'utf8');
+    const h5PreviewSource = readFileSync(resolve(mobileRoot, 'src/h5-preview/App.vue'), 'utf8');
+
+    expect(mobileLoginSource).toContain("handleSendCode('register')");
+    expect(mobileLoginSource).toContain('form.smsCode');
+    expect(mobileLoginSource).toContain('验证码登录');
+
+    expect(h5PreviewSource).toContain("handleSendCode('register')");
+    expect(h5PreviewSource).toContain('registerForm.smsCode');
+    expect(h5PreviewSource).toContain('验证码登录');
+  });
+
+  it('keeps the public H5 login page member-only', () => {
+    const h5PreviewSource = readFileSync(resolve(mobileRoot, 'src/h5-preview/App.vue'), 'utf8');
+
+    expect(h5PreviewSource).not.toContain('管理员登录');
+    expect(h5PreviewSource).not.toContain('进入管理后台');
+    expect(h5PreviewSource).not.toContain('管理员视图');
+    expect(h5PreviewSource).not.toContain('进入真实运营后台');
+  });
+
+  it('keeps the admin login page admin-only', () => {
+    const adminLoginSource = readFileSync(resolve(adminRoot, 'src/views/auth/LoginView.vue'), 'utf8');
+
+    expect(adminLoginSource).toContain('运营后台');
+    expect(adminLoginSource).not.toContain('验证会员账号');
+    expect(adminLoginSource).not.toContain('注册会员账号');
+    expect(adminLoginSource).not.toContain('短信找回会员密码');
+    expect(adminLoginSource).not.toContain("handleSendCode('register')");
+  });
+
   it('does not hardcode member asset values in the uni-app profile page', () => {
     const source = readFileSync(resolve(mobileRoot, 'src/pages/profile/index.vue'), 'utf8');
 

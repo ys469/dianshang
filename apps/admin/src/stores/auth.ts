@@ -27,7 +27,7 @@ export const useAuthStore = defineStore('auth', {
       nickname: string,
       password: string,
       confirmPassword: string,
-      smsCode: string
+      smsCode?: string
     ) {
       const result = await authClient.register(
         mobile,

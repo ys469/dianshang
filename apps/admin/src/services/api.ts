@@ -192,7 +192,7 @@ export interface AuthPayload {
   user: AuthUser;
 }
 
-export type SmsScene = 'register' | 'reset_password';
+export type SmsScene = 'register' | 'reset_password' | 'login';
 
 export interface SmsCodePayload {
   mobile: string;
@@ -471,11 +471,23 @@ export const authClient = {
     nickname: string,
     password: string,
     confirmPassword: string,
-    smsCode: string
+    smsCode?: string
   ): Promise<AuthPayload> {
+    const payload: {
+      mobile: string;
+      nickname: string;
+      password: string;
+      confirmPassword: string;
+      smsCode?: string;
+    } = { mobile, nickname, password, confirmPassword };
+
+    if (smsCode?.trim()) {
+      payload.smsCode = smsCode.trim();
+    }
+
     return fetchJson<AuthPayload>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ mobile, nickname, password, confirmPassword, smsCode })
+      body: JSON.stringify(payload)
     });
   },
 

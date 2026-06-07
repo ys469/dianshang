@@ -101,7 +101,7 @@ export class AdminController {
   }
 
   @Patch('users/:id')
-  updateUser(
+  async updateUser(
     @Param('id') id: string,
     @Body()
     body: {
@@ -116,7 +116,7 @@ export class AdminController {
     const authUserId = this.runtimeDataService.getMemberAuthUserId(id);
 
     if (authUserId && body.memberLevel?.trim()) {
-      this.authDbService.updateMemberLevel(authUserId, body.memberLevel.trim());
+      await this.authDbService.updateMemberLevel(authUserId, body.memberLevel.trim());
     }
 
     return ok(updated, 'member updated');

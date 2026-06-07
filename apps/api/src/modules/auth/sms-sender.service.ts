@@ -39,7 +39,9 @@ export class SmsSenderService {
     const templateId =
       input.scene === 'register'
         ? this.readRequiredEnv('SMS_TENCENT_TEMPLATE_ID_REGISTER')
-        : this.readRequiredEnv('SMS_TENCENT_TEMPLATE_ID_RESET_PASSWORD');
+        : input.scene === 'login'
+          ? this.readRequiredEnv('SMS_TENCENT_TEMPLATE_ID_LOGIN')
+          : this.readRequiredEnv('SMS_TENCENT_TEMPLATE_ID_RESET_PASSWORD');
 
     const SmsClient = sms.v20210111.Client;
     const client = new SmsClient({

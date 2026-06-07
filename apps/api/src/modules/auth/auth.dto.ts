@@ -1,6 +1,6 @@
 import { IsIn, IsMobilePhone, IsString, Length, MinLength } from 'class-validator';
 
-export type SmsScene = 'register' | 'reset_password';
+export type SmsScene = 'register' | 'reset_password' | 'login';
 
 export class LoginDto {
   @IsIn(['user', 'admin'])
@@ -32,6 +32,15 @@ export class RegisterDto {
   confirmPassword!: string;
 }
 
+export class SmsLoginDto {
+  @IsMobilePhone('zh-CN')
+  mobile!: string;
+
+  @IsString()
+  @Length(6, 6)
+  smsCode!: string;
+}
+
 export class ResetPasswordDto {
   @IsMobilePhone('zh-CN')
   mobile!: string;
@@ -53,6 +62,6 @@ export class SendSmsCodeDto {
   @IsMobilePhone('zh-CN')
   mobile!: string;
 
-  @IsIn(['register', 'reset_password'])
+  @IsIn(['register', 'reset_password', 'login'])
   scene!: SmsScene;
 }

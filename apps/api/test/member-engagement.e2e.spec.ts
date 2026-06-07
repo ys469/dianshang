@@ -13,10 +13,12 @@ describe('/member engagement', () => {
   let memberToken = '';
   const tempDir = join(tmpdir(), 'smart-member-mall-tests');
   const dbFile = join(tempDir, `member-engagement-${Date.now()}.sqlite`);
+  const runtimeFile = join(tempDir, `member-engagement-runtime-${Date.now()}.json`);
 
   beforeAll(async () => {
     mkdirSync(tempDir, { recursive: true });
     process.env.AUTH_DB_FILE = dbFile;
+    process.env.RUNTIME_DATA_FILE = runtimeFile;
     process.env.JWT_SECRET = 'member-engagement-secret';
     delete process.env.AI_CUSTOMER_SERVICE_API_KEY;
     delete process.env.AI_CUSTOMER_SERVICE_BASE_URL;
@@ -40,10 +42,15 @@ describe('/member engagement', () => {
   afterAll(async () => {
     await app.close();
     delete process.env.AUTH_DB_FILE;
+    delete process.env.RUNTIME_DATA_FILE;
     delete process.env.JWT_SECRET;
 
     if (existsSync(dbFile)) {
       rmSync(dbFile, { force: true });
+    }
+
+    if (existsSync(runtimeFile)) {
+      rmSync(runtimeFile, { force: true });
     }
   });
 

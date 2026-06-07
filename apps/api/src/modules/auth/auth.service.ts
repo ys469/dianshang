@@ -11,7 +11,14 @@ import { randomInt } from 'node:crypto';
 import { hashPassword, verifyPassword } from '../../common/crypto';
 import { RuntimeDataService } from '../runtime-data/runtime-data.service';
 import { AuthDbService, type AuthUserRecord } from './auth-db.service';
-import type { LoginDto, RegisterDto, ResetPasswordDto, SendSmsCodeDto, SmsScene } from './auth.dto';
+import type {
+  LoginDto,
+  RegisterDto,
+  ResetPasswordDto,
+  SendSmsCodeDto,
+  SmsLoginDto,
+  SmsScene
+} from './auth.dto';
 import { SmsCodeStoreService } from './sms-code-store.service';
 import { SmsSenderService } from './sms-sender.service';
 
@@ -26,13 +33,16 @@ export class AuthService {
   ) {}
 
   async sendSmsCode(dto: SendSmsCodeDto) {
-    const existingUser = this.authDbService.findByMobile(dto.mobile);
+    const existingUser = await this.authDbService.findByMobile(dto.mobile);
 
     if (dto.scene === 'register' && existingUser) {
       throw new ConflictException('该手机号已注册');
     }
 
-    if (dto.scene === 'reset_password' && (!existingUser || existingUser.role !== 'user')) {
+    if (
+      (dto.scene === 'reset_password' || dto.scene === 'login') &&
+      (!existingUser || existingUser.role !== 'user')
+    ) {
       throw new NotFoundException('该手机号未注册');
     }
 
@@ -56,14 +66,34 @@ export class AuthService {
     };
   }
 
+  async smsLogin(dto: SmsLoginDto) {
+    const user = await this.authDbService.findByMobile(dto.mobile);
+
+    if (!user || user.role !== 'user') {
+      throw new NotFoundException('该手机号未注册');
+    }
+
+    await this.assertValidSmsCode(dto.mobile, 'login', dto.smsCode);
+
+    this.runtimeDataService.ensureMemberProfile({
+      authUserId: user.id,
+      nickname: user.nickname,
+      mobile: user.mobile ?? dto.mobile,
+      memberLevel: user.memberLevel
+    });
+
+    return this.buildAuthPayload(user);
+  }
+
   async register(dto: RegisterDto) {
     this.assertPasswordConfirmation(dto.password, dto.confirmPassword);
 
-    if (this.authDbService.findByMobile(dto.mobile)) {
+    const existingUser = await this.authDbService.findByMobile(dto.mobile);
+    if (existingUser) {
       throw new ConflictException('该手机号已注册');
     }
 
-    const user = this.authDbService.createUser({
+    const user = await this.authDbService.createUser({
       role: 'user',
       account: dto.mobile,
       mobile: dto.mobile,
@@ -85,15 +115,14 @@ export class AuthService {
   async resetPassword(dto: ResetPasswordDto) {
     this.assertPasswordConfirmation(dto.password, dto.confirmPassword);
 
-    const user = this.authDbService.findByMobile(dto.mobile);
+    const user = await this.authDbService.findByMobile(dto.mobile);
 
     if (!user || user.role !== 'user') {
       throw new NotFoundException('该手机号未注册');
     }
 
     await this.assertValidSmsCode(dto.mobile, 'reset_password', dto.smsCode);
-
-    this.authDbService.updatePassword(user.id, hashPassword(dto.password));
+    await this.authDbService.updatePassword(user.id, hashPassword(dto.password));
 
     return {
       mobile: user.mobile,
@@ -102,7 +131,7 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
-    const user = this.authDbService.findByRoleAndAccount(dto.role, dto.account);
+    const user = await this.authDbService.findByRoleAndAccount(dto.role, dto.account);
     if (!user || !verifyPassword(dto.password, user.passwordHash)) {
       throw new UnauthorizedException(
         dto.role === 'admin' ? '管理员账号或密码错误' : '账号或密码错误'
@@ -125,7 +154,7 @@ export class AuthService {
     const account = String(jwtPayload.account ?? '');
     const role = (jwtPayload.role === 'admin' ? 'admin' : 'user') as 'user' | 'admin';
 
-    const user = this.authDbService.findByRoleAndAccount(role, account);
+    const user = await this.authDbService.findByRoleAndAccount(role, account);
     if (!user) {
       throw new UnauthorizedException('用户不存在');
     }

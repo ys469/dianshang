@@ -5,11 +5,13 @@ import type { HomePayload, MemberProfile, OrderPayload } from '../services/api';
 
 const {
   cancelOrderMock,
+  claimDailyCheckInMock,
   createOrderMock,
   getOrdersMock,
   getProfileMock,
   loginMock,
   registerMock,
+  smsLoginMock,
   sendSmsCodeMock,
   profileState,
   updateProfileMock
@@ -51,6 +53,16 @@ const {
         memberLevel: role === 'user' ? 'Gold' : 'Admin'
       }
     })),
+    smsLoginMock: vi.fn(async (mobile: string) => ({
+      token: 'user-sms-token',
+      user: {
+        id: 'user-1',
+        role: 'user' as const,
+        nickname: 'Formal Member',
+        mobile,
+        memberLevel: 'Gold'
+      }
+    })),
     registerMock: vi.fn(async (mobile: string, nickname: string) => ({
       token: 'register-token',
       user: {
@@ -68,6 +80,23 @@ const {
       provider: 'mock' as const,
       debugCode: '123456'
     })),
+    claimDailyCheckInMock: vi.fn(async () => {
+      state.profile = {
+        ...state.profile,
+        points: state.profile.points + 20,
+        coupons: state.profile.coupons + 1,
+        lastCheckInAt: new Date().toISOString(),
+        checkinStreak: (state.profile.checkinStreak ?? 0) + 1
+      };
+
+      return {
+        rewardPoints: 20,
+        rewardCoupons: 1,
+        rewardLabel: '连续签到奖励',
+        streak: state.profile.checkinStreak,
+        profile: { ...state.profile }
+      };
+    }),
     getProfileMock: vi.fn(async () => ({ ...state.profile })),
     getOrdersMock: vi.fn(async () => state.orders.map((order) => ({ ...order }))),
     updateProfileMock: vi.fn(
@@ -192,6 +221,7 @@ vi.mock('../services/api', async () => {
     authClient: {
       ...actual.authClient,
       login: loginMock,
+      smsLogin: smsLoginMock,
       register: registerMock,
       sendSmsCode: sendSmsCodeMock
     },
@@ -202,6 +232,7 @@ vi.mock('../services/api', async () => {
     },
     memberClient: {
       ...actual.memberClient,
+      claimDailyCheckIn: claimDailyCheckInMock,
       getProfile: getProfileMock,
       getOrders: getOrdersMock,
       updateProfile: updateProfileMock
@@ -221,6 +252,22 @@ const sampleProduct: HomePayload['sections'][number]['products'][number] = {
 describe('demo mall store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    const storage = new Map<string, string>();
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        clear: () => {
+          storage.clear();
+        }
+      }
+    });
     profileState.profile = {
       id: 'user-1',
       nickname: 'Formal Member',
@@ -239,6 +286,7 @@ describe('demo mall store', () => {
     };
     profileState.orders = [];
     loginMock.mockClear();
+    smsLoginMock.mockClear();
     registerMock.mockClear();
     sendSmsCodeMock.mockClear();
     getProfileMock.mockClear();
@@ -246,6 +294,7 @@ describe('demo mall store', () => {
     updateProfileMock.mockClear();
     createOrderMock.mockClear();
     cancelOrderMock.mockClear();
+    claimDailyCheckInMock.mockClear();
   });
 
   it('merges repeated add-to-cart actions into one cart line', () => {
@@ -316,8 +365,8 @@ describe('demo mall store', () => {
       password: 'member123'
     });
 
-    const firstReward = store.claimDailyCheckIn();
-    const secondReward = store.claimDailyCheckIn();
+    const firstReward = await store.claimDailyCheckIn();
+    const secondReward = await store.claimDailyCheckIn();
 
     expect(firstReward.success).toBe(true);
     expect(secondReward.success).toBe(false);
@@ -364,19 +413,21 @@ describe('demo mall store', () => {
     expect(userResult.success).toBe(true);
     expect(store.isAuthenticated).toBe(true);
     expect(store.currentRole).toBe('user');
+  });
 
-    store.logout();
+  it('supports member sms login with a verified code', async () => {
+    const store = useDemoMallStore();
 
-    const adminResult = await store.login({
-      role: 'admin',
-      account: 'ops-admin',
-      password: 'secret123'
+    const result = await store.smsLogin({
+      mobile: '13800138000',
+      smsCode: '123456'
     });
 
-    expect(adminResult.success).toBe(true);
-    expect(store.currentRole).toBe('admin');
-    expect(store.currentUserName).toBe('Operations Admin');
-    expect(store.activeAdminShortcut).toBe('products');
+    expect(result.success).toBe(true);
+    expect(smsLoginMock).toHaveBeenCalledWith('13800138000', '123456');
+    expect(store.isAuthenticated).toBe(true);
+    expect(store.currentRole).toBe('user');
+    expect(store.currentUserMobile).toBe('13800138000');
   });
 
   it('clears previous member assets before syncing a newly registered account', async () => {
@@ -426,7 +477,8 @@ describe('demo mall store', () => {
       '13900000009',
       'New Member',
       'test123456',
-      'test123456'
+      'test123456',
+      undefined
     );
     expect(store.currentUserName).toBe('New Member');
     expect(store.currentUserMobile).toBe('13900000009');
@@ -445,6 +497,29 @@ describe('demo mall store', () => {
     expect(result.success).toBe(true);
     expect(sendSmsCodeMock).toHaveBeenCalledWith('13900000001', 'register');
     expect(store.feedbackMessage).toContain('123456');
+  });
+
+  it('drops stale admin sessions when restoring the public member app', async () => {
+    const store = useDemoMallStore();
+
+    globalThis.localStorage.setItem('smart-member-mobile-token', 'admin-token');
+    globalThis.localStorage.setItem(
+      'smart-member-mobile-user',
+      JSON.stringify({
+        id: 'admin-1',
+        nickname: 'Operations Admin',
+        mobile: '',
+        role: 'admin'
+      })
+    );
+
+    const result = await store.restoreSession();
+
+    expect(result.success).toBe(false);
+    expect(store.isAuthenticated).toBe(false);
+    expect(store.currentRole).toBe('user');
+    expect(globalThis.localStorage.getItem('smart-member-mobile-token')).toBeNull();
+    expect(globalThis.localStorage.getItem('smart-member-mobile-user')).toBeNull();
   });
 
   it('cancels a just-created order and restores member assets', async () => {

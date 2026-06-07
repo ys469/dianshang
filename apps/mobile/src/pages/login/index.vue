@@ -3,23 +3,28 @@ import { onUnmounted, reactive, ref } from 'vue';
 import { useAuthStore } from '../../stores/auth';
 
 type AuthMode = 'login' | 'register' | 'reset';
+type LoginMethod = 'password' | 'sms';
 type MessageType = 'info' | 'success' | 'error';
 
 const authStore = useAuthStore();
 const mode = ref<AuthMode>('login');
+const loginMethod = ref<LoginMethod>('password');
 const message = ref('');
 const messageType = ref<MessageType>('info');
 const submitting = ref(false);
-const sendingScene = ref<'register' | 'reset_password' | null>(null);
+const sendingScene = ref<'register' | 'reset_password' | 'login' | null>(null);
 const registerCountdown = ref(0);
 const resetCountdown = ref(0);
+const loginCountdown = ref(0);
 
 let registerTimer: ReturnType<typeof setInterval> | null = null;
 let resetTimer: ReturnType<typeof setInterval> | null = null;
+let loginTimer: ReturnType<typeof setInterval> | null = null;
 
 const form = reactive({
   account: '',
   password: '',
+  loginSmsCode: '',
   mobile: '',
   nickname: '',
   smsCode: '',
@@ -53,7 +58,14 @@ function clearResetTimer() {
   }
 }
 
-function startCountdown(scene: 'register' | 'reset_password', seconds = 60) {
+function clearLoginTimer() {
+  if (loginTimer) {
+    clearInterval(loginTimer);
+    loginTimer = null;
+  }
+}
+
+function startCountdown(scene: 'register' | 'reset_password' | 'login', seconds = 60) {
   if (scene === 'register') {
     clearRegisterTimer();
     registerCountdown.value = seconds;
@@ -61,6 +73,18 @@ function startCountdown(scene: 'register' | 'reset_password', seconds = 60) {
       registerCountdown.value -= 1;
       if (registerCountdown.value <= 0) {
         clearRegisterTimer();
+      }
+    }, 1000);
+    return;
+  }
+
+  if (scene === 'login') {
+    clearLoginTimer();
+    loginCountdown.value = seconds;
+    loginTimer = setInterval(() => {
+      loginCountdown.value -= 1;
+      if (loginCountdown.value <= 0) {
+        clearLoginTimer();
       }
     }, 1000);
     return;
@@ -76,8 +100,9 @@ function startCountdown(scene: 'register' | 'reset_password', seconds = 60) {
   }, 1000);
 }
 
-async function handleSendCode(scene: 'register' | 'reset_password') {
-  const mobile = scene === 'register' ? form.mobile : form.resetMobile;
+async function handleSendCode(scene: 'register' | 'reset_password' | 'login') {
+  const mobile =
+    scene === 'register' ? form.mobile : scene === 'login' ? form.account : form.resetMobile;
 
   if (!validateMobile(mobile)) {
     setMessage('error', '请输入正确的手机号');
@@ -86,10 +111,15 @@ async function handleSendCode(scene: 'register' | 'reset_password') {
 
   sendingScene.value = scene;
   try {
-    await authStore.sendSmsCode(mobile, scene);
+    const result = await authStore.sendSmsCode(mobile, scene);
 
     startCountdown(scene);
-    setMessage('success', '验证码已发送，请留意短信');
+    setMessage(
+      'success',
+      result.provider === 'mock' && result.debugCode
+        ? `验证码已发送，当前测试验证码：${result.debugCode}`
+        : '验证码已发送，请留意短信'
+    );
   } catch (error: unknown) {
     setMessage('error', error instanceof Error ? error.message : '验证码发送失败');
   } finally {
@@ -100,24 +130,55 @@ async function handleSendCode(scene: 'register' | 'reset_password') {
 async function handleLogin() {
   setMessage('info', '');
 
-  if (!form.account || !form.password) {
-    setMessage('error', '请填写账号和密码');
+  if (!form.account) {
+    setMessage('error', loginMethod.value === 'password' ? '请填写账号和密码' : '请输入已注册手机号');
     return;
   }
 
-  if (form.password.length < 6) {
-    setMessage('error', '密码至少 6 位');
-    return;
+  if (loginMethod.value === 'password') {
+    if (!form.password) {
+      setMessage('error', '请填写账号和密码');
+      return;
+    }
+
+    if (form.password.length < 6) {
+      setMessage('error', '密码至少 6 位');
+      return;
+    }
+  } else {
+    if (!validateMobile(form.account.trim())) {
+      setMessage('error', '请输入已注册手机号');
+      return;
+    }
+
+    if (!form.loginSmsCode.trim()) {
+      setMessage('error', '请输入短信验证码');
+      return;
+    }
   }
 
   submitting.value = true;
   try {
-    await authStore.login('user', form.account.trim(), form.password);
+    if (loginMethod.value === 'password') {
+      await authStore.login('user', form.account.trim(), form.password);
+    } else {
+      await authStore.smsLogin(form.account.trim(), form.loginSmsCode.trim());
+    }
+
     setMessage('success', '登录成功');
+    form.password = '';
+    form.loginSmsCode = '';
     uni.navigateBack();
   } catch (error: unknown) {
     const text = error instanceof Error ? error.message : '登录失败';
-    setMessage('error', text.includes('401') ? '账号或密码错误' : text);
+    setMessage(
+      'error',
+      text.includes('401')
+        ? loginMethod.value === 'password'
+          ? '账号或密码错误'
+          : '手机号或验证码错误'
+        : text
+    );
   } finally {
     submitting.value = false;
   }
@@ -128,11 +189,6 @@ async function handleRegister() {
 
   if (!validateMobile(form.mobile)) {
     setMessage('error', '请输入正确的手机号');
-    return;
-  }
-
-  if (!form.smsCode.trim()) {
-    setMessage('error', '请输入短信验证码');
     return;
   }
 
@@ -158,8 +214,9 @@ async function handleRegister() {
       form.nickname.trim(),
       form.password,
       form.confirmPassword,
-      form.smsCode.trim()
+      form.smsCode.trim() || undefined
     );
+    form.smsCode = '';
     setMessage('success', '注册成功，已自动登录');
     uni.navigateBack();
   } catch (error: unknown) {
@@ -218,12 +275,17 @@ async function handleResetPassword() {
 
 function switchMode(nextMode: AuthMode) {
   mode.value = nextMode;
+  if (nextMode === 'login') {
+    loginMethod.value = 'password';
+    form.loginSmsCode = '';
+  }
   setMessage('info', '');
 }
 
 onUnmounted(() => {
   clearRegisterTimer();
   clearResetTimer();
+  clearLoginTimer();
 });
 </script>
 
@@ -249,16 +311,30 @@ onUnmounted(() => {
       </view>
 
       <view v-if="mode === 'login'" class="form">
+        <view class="method-toggle">
+          <button
+            :class="['method-btn', { active: loginMethod === 'password' }]"
+            @tap="loginMethod = 'password'"
+          >
+            密码登录
+          </button>
+          <button
+            :class="['method-btn', { active: loginMethod === 'sms' }]"
+            @tap="loginMethod = 'sms'"
+          >
+            验证码登录
+          </button>
+        </view>
         <view class="form-item">
-          <text class="label">手机号 / 账号</text>
+          <text class="label">{{ loginMethod === 'password' ? '手机号 / 账号' : '已注册手机号' }}</text>
           <input
             v-model="form.account"
             class="input"
-            placeholder="请输入手机号或账号"
+            :placeholder="loginMethod === 'password' ? '请输入手机号或账号' : '请输入已注册手机号'"
             type="text"
           />
         </view>
-        <view class="form-item">
+        <view v-if="loginMethod === 'password'" class="form-item">
           <text class="label">密码</text>
           <input
             v-model="form.password"
@@ -266,6 +342,25 @@ onUnmounted(() => {
             placeholder="请输入密码"
             :password="true"
           />
+        </view>
+        <view v-else class="form-item">
+          <text class="label">短信验证码</text>
+          <view class="code-row">
+            <input
+              v-model="form.loginSmsCode"
+              class="input code-input"
+              placeholder="请输入验证码"
+              type="number"
+              maxlength="6"
+            />
+            <button
+              class="code-btn"
+              :disabled="loginCountdown > 0 || sendingScene === 'login'"
+              @tap="handleSendCode('login')"
+            >
+              {{ loginCountdown > 0 ? `${loginCountdown}s` : '发送验证码' }}
+            </button>
+          </view>
         </view>
         <button class="submit-btn" :loading="submitting" :disabled="submitting" @tap="handleLogin">
           登录
@@ -540,6 +635,27 @@ onUnmounted(() => {
 .code-row {
   display: flex;
   gap: 16rpx;
+}
+
+.method-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16rpx;
+}
+
+.method-btn {
+  height: 76rpx;
+  border: none;
+  border-radius: 16rpx;
+  background: #f3f4f6;
+  color: #667085;
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
+.method-btn.active {
+  background: rgba(124, 77, 255, 0.14);
+  color: #7c4dff;
 }
 
 .code-input {

@@ -42,9 +42,15 @@ const router = createRouter({
 router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore();
 
-  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+  if (authStore.isAuthenticated && !authStore.isAdmin) {
+    authStore.logout();
+    next({ name: 'login' });
+    return;
+  }
+
+  if (to.meta.requiresAuth && (!authStore.isAuthenticated || !authStore.isAdmin)) {
     next({ name: 'login', query: { redirect: to.fullPath } });
-  } else if (to.meta.guest && authStore.isAuthenticated) {
+  } else if (to.meta.guest && authStore.isAuthenticated && authStore.isAdmin) {
     next({ path: '/' });
   } else {
     next();

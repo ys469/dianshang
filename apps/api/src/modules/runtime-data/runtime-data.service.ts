@@ -5,8 +5,10 @@ import {
   OnModuleInit,
   NotFoundException
 } from '@nestjs/common';
+import type { Pool, RowDataPacket } from 'mysql2/promise';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { createMysqlPool } from '../../common/mysql';
 import {
   banners as seedBanners,
   categories as seedCategories,
@@ -15,12 +17,14 @@ import {
   orders as seedOrders,
   products as seedProducts
 } from '../../data/demo-data';
+import { resolveRuntimeDataProvider, type RuntimeDataProvider } from './runtime-data.config';
 
 type FinanceRange = 'today' | 'week' | 'month';
 type PaymentMethod = 'balance' | 'wechat';
 type PaymentChannel = 'balance' | 'native' | 'h5';
 type PaymentState = 'pending' | 'success' | 'failed' | 'closed';
 const ORDER_CANCEL_WINDOW_MS = 3 * 60 * 1000;
+const RUNTIME_STATE_KEY = 'mall_state';
 
 interface ProductRecord {
   id: string;
@@ -220,6 +224,12 @@ interface RuntimeState {
   systemNotifications: NotificationRecord[];
 }
 
+interface RuntimeStateRow extends RowDataPacket {
+  state_key: string;
+  payload: string;
+  updated_at: string;
+}
+
 function roundMoney(value: number) {
   return Number(value.toFixed(2));
 }
@@ -354,12 +364,43 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     }
   ];
 
-  onModuleInit() {
-    this.hydrateState();
+  private provider: RuntimeDataProvider = resolveRuntimeDataProvider(process.env);
+  private pool: Pool | null = null;
+  private pendingPersist: Promise<void> = Promise.resolve();
+
+  async onModuleInit() {
+    this.provider = resolveRuntimeDataProvider(process.env);
+
+    if (this.provider === 'mysql') {
+      await this.initMysql();
+    }
+
+    await this.hydrateState();
   }
 
-  onModuleDestroy() {
+  async onModuleDestroy() {
     this.persistState();
+
+    await this.pendingPersist.catch((error) => {
+      console.error('Failed to flush runtime state before shutdown', error);
+    });
+
+    if (this.provider === 'mysql' && this.pool) {
+      await this.pool.end();
+      this.pool = null;
+    }
+  }
+
+  private async initMysql() {
+    this.pool = createMysqlPool();
+
+    await this.pool.execute(`
+      CREATE TABLE IF NOT EXISTS runtime_state (
+        state_key VARCHAR(64) PRIMARY KEY,
+        payload LONGTEXT NOT NULL,
+        updated_at VARCHAR(40) NOT NULL
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `);
   }
 
   getCategories() {
@@ -1948,7 +1989,22 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     return Date.now() <= deadline;
   }
 
-  private hydrateState() {
+  private async hydrateState() {
+    if (this.provider === 'mysql') {
+      const mysqlState = await this.readStateFromMysql();
+      const fallbackState = mysqlState ?? this.readStateFromFile();
+
+      if (fallbackState) {
+        this.applyPersistedState(fallbackState);
+      }
+
+      if (!mysqlState) {
+        await this.writeStateToMysql(this.buildRuntimeStateSnapshot());
+      }
+
+      return;
+    }
+
     const filePath = this.getRuntimeStateFilePath();
     if (!existsSync(filePath)) {
       return;
@@ -2031,6 +2087,21 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
   }
 
   private persistState() {
+    if (this.provider === 'mysql') {
+      const snapshot = this.buildRuntimeStateSnapshot();
+
+      this.pendingPersist = this.pendingPersist
+        .catch((error) => {
+          console.error('Previous runtime state persistence failed', error);
+        })
+        .then(() => this.writeStateToMysql(snapshot))
+        .catch((error) => {
+          console.error('Failed to persist runtime state', error);
+        });
+
+      return;
+    }
+
     const filePath = this.getRuntimeStateFilePath();
     mkdirSync(dirname(filePath), { recursive: true });
 
@@ -2050,8 +2121,151 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     writeFileSync(filePath, JSON.stringify(state, null, 2), 'utf8');
   }
 
+  private readStateFromFile() {
+    const filePath = this.getRuntimeStateFilePath();
+    if (!existsSync(filePath)) {
+      return null;
+    }
+
+    try {
+      const raw = readFileSync(filePath, 'utf8');
+      if (!raw.trim()) {
+        return null;
+      }
+
+      return JSON.parse(raw) as Partial<RuntimeState>;
+    } catch {
+      return null;
+    }
+  }
+
+  private async readStateFromMysql() {
+    const [rows] = await this.getPool().query<RuntimeStateRow[]>(
+      `
+        SELECT state_key, payload, updated_at
+        FROM runtime_state
+        WHERE state_key = ?
+        LIMIT 1
+      `,
+      [RUNTIME_STATE_KEY]
+    );
+
+    const row = rows[0];
+    if (!row?.payload?.trim()) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(row.payload) as Partial<RuntimeState>;
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeStateToMysql(state: RuntimeState) {
+    await this.getPool().execute(
+      `
+        INSERT INTO runtime_state (state_key, payload, updated_at)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          payload = VALUES(payload),
+          updated_at = VALUES(updated_at)
+      `,
+      [RUNTIME_STATE_KEY, JSON.stringify(state), new Date().toISOString()]
+    );
+  }
+
+  private applyPersistedState(parsed: Partial<RuntimeState>) {
+    if (parsed.products?.length) {
+      this.products = parsed.products.map((item) => ({
+        ...item,
+        subtitle: item.subtitle ?? '',
+        description: item.description ?? '',
+        tags: [...(item.tags ?? [])],
+        listed: item.listed ?? true,
+        createdAt: item.createdAt ?? new Date().toISOString(),
+        updatedAt: item.updatedAt ?? item.createdAt ?? new Date().toISOString()
+      }));
+    }
+
+    if (parsed.coupons) {
+      this.coupons = parsed.coupons.map((item) => ({
+        ...item,
+        enabled: item.enabled ?? item.status !== '宸叉殏鍋?'
+      }));
+    }
+
+    if (parsed.flashSales) {
+      this.flashSales = parsed.flashSales.map((item) => ({
+        ...item,
+        enabled: item.enabled ?? item.status !== '宸叉殏鍋?'
+      }));
+    }
+
+    if (parsed.groupBuys) {
+      this.groupBuys = parsed.groupBuys.map((item) => ({
+        ...item,
+        enabled: item.enabled ?? item.status !== '宸叉殏鍋?'
+      }));
+    }
+
+    if (parsed.checkinRules?.length) {
+      this.checkinRules = parsed.checkinRules.map((item) => ({ ...item }));
+    }
+
+    if (parsed.orders) {
+      this.orders = parsed.orders.map((item) => ({
+        ...item,
+        logisticsCompany: item.logisticsCompany ?? null,
+        trackingNo: item.trackingNo ?? null,
+        shippedAt: item.shippedAt ?? null,
+        completedAt: item.completedAt ?? null,
+        items: item.items.map((orderItem) => ({ ...orderItem }))
+      }));
+    }
+
+    if (parsed.members) {
+      this.members = parsed.members.map((item) => ({ ...item }));
+    }
+
+    if (parsed.rechargeRecords) {
+      this.rechargeRecords = parsed.rechargeRecords.map((item) => ({ ...item }));
+    }
+
+    if (parsed.transactions) {
+      this.transactions = parsed.transactions.map((item) => ({ ...item }));
+    }
+
+    if (parsed.systemNotifications) {
+      this.systemNotifications = parsed.systemNotifications.map((item) => ({ ...item }));
+    }
+  }
+
+  private buildRuntimeStateSnapshot(): RuntimeState {
+    return {
+      products: this.products,
+      coupons: this.coupons,
+      flashSales: this.flashSales,
+      groupBuys: this.groupBuys,
+      checkinRules: this.checkinRules,
+      orders: this.orders,
+      members: this.members,
+      rechargeRecords: this.rechargeRecords,
+      transactions: this.transactions,
+      systemNotifications: this.systemNotifications
+    };
+  }
+
   private getRuntimeStateFilePath() {
     return resolve(process.env.RUNTIME_DATA_FILE ?? 'apps/api/runtime/runtime-data.json');
+  }
+
+  private getPool() {
+    if (!this.pool) {
+      throw new Error('MySQL runtime state storage has not been initialized');
+    }
+
+    return this.pool;
   }
 
   private toProductView(product: ProductRecord) {

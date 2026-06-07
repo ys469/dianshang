@@ -3,18 +3,15 @@ import { storeToRefs } from 'pinia';
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useHomeStore } from '../stores/home';
 import {
-  adminShortcutDefinitions,
-  type AdminShortcutDefinition,
-  type AdminShortcutKey,
   type CatalogProduct,
   filterProducts,
-  type LoginRole,
   type ProfileAction,
   useDemoMallStore
 } from './store';
 
 type TabKey = 'home' | 'category' | 'cart' | 'profile';
 type AuthView = 'login' | 'register' | 'reset';
+type LoginMethod = 'password' | 'sms';
 
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'home', label: '首页' },
@@ -32,8 +29,6 @@ const profileMenus: Array<{ label: string; action: ProfileAction }> = [
   { label: '联系客服', action: 'support' }
 ];
 
-const adminShortcuts: AdminShortcutDefinition[] = adminShortcutDefinitions;
-
 const categoryKeywordMap: Record<string, string[]> = {
   food: ['蜜桃', '鲜', '礼盒', '水果', '零食'],
   beauty: ['护肤', '美妆'],
@@ -48,23 +43,19 @@ const categoryKeywordMap: Record<string, string[]> = {
 const homeStore = useHomeStore();
 const mallStore = useDemoMallStore();
 const activeTab = ref<TabKey>('home');
-const authMode = ref<LoginRole>('user');
 const authView = ref<AuthView>('login');
+const loginMethod = ref<LoginMethod>('password');
 
 const loginForm = reactive({
-  user: {
-    account: '',
-    password: ''
-  },
-  admin: {
-    account: '',
-    password: ''
-  }
+  account: '',
+  password: '',
+  smsCode: ''
 });
 
 const registerForm = reactive({
   mobile: '',
   nickname: '',
+  smsCode: '',
   password: '',
   confirmPassword: ''
 });
@@ -78,14 +69,15 @@ const resetForm = reactive({
 
 const registerCountdown = ref(0);
 const resetCountdown = ref(0);
+const loginCountdown = ref(0);
 
 let registerTimer: ReturnType<typeof setInterval> | null = null;
 let resetTimer: ReturnType<typeof setInterval> | null = null;
+let loginTimer: ReturnType<typeof setInterval> | null = null;
 
 const { banners, categories, notice, sections } = storeToRefs(homeStore);
 const {
   activePanel,
-  activeAdminShortcut,
   cart,
   cartCount,
   cartTotal,
@@ -96,7 +88,6 @@ const {
   defaultConsignee,
   defaultAddress,
   feedbackMessage,
-  isAdmin,
   isAuthenticated,
   orders,
   points,
@@ -183,6 +174,9 @@ onUnmounted(() => {
   if (resetTimer) {
     window.clearInterval(resetTimer);
   }
+  if (loginTimer) {
+    window.clearInterval(loginTimer);
+  }
   if (orderClock) {
     window.clearInterval(orderClock);
   }
@@ -204,6 +198,10 @@ watch(feedbackMessage, (message, _, onCleanup) => {
 
 function switchAuthView(nextView: AuthView) {
   authView.value = nextView;
+  if (nextView === 'login') {
+    loginMethod.value = 'password';
+    loginForm.smsCode = '';
+  }
   mallStore.clearFeedback();
 }
 
@@ -266,62 +264,9 @@ const memberStats = computed(() => [
   { label: '累计订单', value: `${orders.value.length}` }
 ]);
 
-const adminStats = computed(() => [
-  { label: '商品数', value: `${catalogProducts.value.length}` },
-  { label: '订单数', value: `${orders.value.length}` },
-  {
-    label: '累计销售',
-    value: `¥${orders.value.reduce((sum, order) => sum + order.total, 0).toFixed(2)}`
-  },
-  { label: '消息提醒', value: `${unreadMessages.value}` }
-]);
-
-const adminModuleRoutes: Record<AdminShortcutKey, string> = {
-  products: '/products',
-  members: '/members',
-  orders: '/orders',
-  marketing: '/marketing',
-  finance: '/finance',
-  notifications: '/notifications'
-};
-
 const selectedCategoryLabel = computed(
   () => categories.value.find((item) => item.id === selectedCategoryId.value)?.name ?? '全部商品'
 );
-
-const adminConsoleBaseUrl = computed(() => {
-  const configuredUrl = import.meta.env.VITE_ADMIN_BASE_URL?.trim();
-  if (configuredUrl) {
-    return configuredUrl.replace(/\/$/, '');
-  }
-
-  if (typeof window === 'undefined') {
-    return 'https://admin.huakaibuxie.online';
-  }
-
-  const { protocol, hostname } = window.location;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return `${protocol}//${hostname}:5173`;
-  }
-
-  if (
-    hostname === 'huakaibuxie.online' ||
-    hostname === 'www.huakaibuxie.online' ||
-    hostname === 'm.huakaibuxie.online'
-  ) {
-    return 'https://admin.huakaibuxie.online';
-  }
-
-  return `${protocol}//${hostname}:8081`;
-});
-
-const adminConsoleLabel = computed(() =>
-  adminConsoleBaseUrl.value.replace(/^https?:\/\//, '')
-);
-
-function buildAdminConsoleUrl(shortcut: AdminShortcutKey = 'products') {
-  return `${adminConsoleBaseUrl.value}/#${adminModuleRoutes[shortcut]}`;
-}
 
 const panelTitle = computed(() => {
   switch (activePanel.value) {
@@ -511,35 +456,11 @@ async function handleCancelOrder(orderNo: string) {
   }
 }
 
-function handleAdminShortcut(shortcut: AdminShortcutKey) {
-  mallStore.openAdminShortcut(shortcut);
-}
-
-function openExternalLink(url: string) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  const openedWindow = window.open(url, '_blank', 'noopener,noreferrer');
-  if (!openedWindow) {
-    window.location.href = url;
-  }
-}
-
-function handleOpenAdminConsole() {
-  openExternalLink(buildAdminConsoleUrl(activeAdminShortcut.value ?? 'products'));
-}
-
-function handleOpenAdminModule(shortcut: AdminShortcutKey) {
-  handleAdminShortcut(shortcut);
-  openExternalLink(buildAdminConsoleUrl(shortcut));
-}
-
 function validateMobile(value: string) {
   return /^1[3-9]\d{9}$/.test(value);
 }
 
-function startCountdown(scene: 'register' | 'reset_password', seconds = 60) {
+function startCountdown(scene: 'register' | 'reset_password' | 'login', seconds = 60) {
   if (scene === 'register') {
     if (registerTimer) {
       window.clearInterval(registerTimer);
@@ -550,6 +471,21 @@ function startCountdown(scene: 'register' | 'reset_password', seconds = 60) {
       if (registerCountdown.value <= 0 && registerTimer) {
         window.clearInterval(registerTimer);
         registerTimer = null;
+      }
+    }, 1000);
+    return;
+  }
+
+  if (scene === 'login') {
+    if (loginTimer) {
+      window.clearInterval(loginTimer);
+    }
+    loginCountdown.value = seconds;
+    loginTimer = window.setInterval(() => {
+      loginCountdown.value -= 1;
+      if (loginCountdown.value <= 0 && loginTimer) {
+        window.clearInterval(loginTimer);
+        loginTimer = null;
       }
     }, 1000);
     return;
@@ -568,8 +504,14 @@ function startCountdown(scene: 'register' | 'reset_password', seconds = 60) {
   }, 1000);
 }
 
-async function handleSendCode(scene: 'register' | 'reset_password') {
-  const mobile = (scene === 'register' ? registerForm.mobile : resetForm.mobile).trim();
+async function handleSendCode(scene: 'register' | 'reset_password' | 'login') {
+  const mobile = (
+    scene === 'register'
+      ? registerForm.mobile
+      : scene === 'login'
+        ? loginForm.account
+        : resetForm.mobile
+  ).trim();
   if (!validateMobile(mobile)) {
     mallStore.setFeedback('请输入正确的手机号');
     return;
@@ -583,28 +525,51 @@ async function handleSendCode(scene: 'register' | 'reset_password') {
   startCountdown(scene);
 }
 
-async function handleLogin(role: LoginRole) {
-  authMode.value = role;
-  const payload = loginForm[role];
-  const account = payload.account.trim();
+async function handleLogin() {
+  const account = loginForm.account.trim();
 
-  if (!account || !payload.password) {
-    mallStore.setFeedback('请输入账号和密码');
+  if (!account) {
+    mallStore.setFeedback(loginMethod.value === 'password' ? '请输入账号和密码' : '请输入已注册手机号');
     return;
   }
 
-  if (payload.password.length < 6) {
-    mallStore.setFeedback('密码至少 6 位');
-    return;
+  if (loginMethod.value === 'password') {
+    if (!loginForm.password) {
+      mallStore.setFeedback('请输入账号和密码');
+      return;
+    }
+
+    if (loginForm.password.length < 6) {
+      mallStore.setFeedback('密码至少 6 位');
+      return;
+    }
+  } else {
+    if (!validateMobile(account)) {
+      mallStore.setFeedback('请输入已注册手机号');
+      return;
+    }
+
+    if (!loginForm.smsCode.trim()) {
+      mallStore.setFeedback('请输入短信验证码');
+      return;
+    }
   }
 
-  const result = await mallStore.login({
-    role,
-    account,
-    password: payload.password
-  });
+  const result =
+    loginMethod.value === 'sms'
+      ? await mallStore.smsLogin({
+          mobile: account,
+          smsCode: loginForm.smsCode.trim()
+        })
+      : await mallStore.login({
+          role: 'user',
+          account,
+          password: loginForm.password
+        });
 
   if (result.success) {
+    loginForm.password = '';
+    loginForm.smsCode = '';
     await homeStore.fetchHome();
   }
 }
@@ -633,6 +598,7 @@ async function handleRegister() {
   const result = await mallStore.register({
     mobile: registerForm.mobile.trim(),
     nickname: registerForm.nickname.trim(),
+    smsCode: registerForm.smsCode.trim() || undefined,
     password: registerForm.password,
     confirmPassword: registerForm.confirmPassword
   });
@@ -641,6 +607,7 @@ async function handleRegister() {
     authView.value = 'login';
     registerForm.mobile = '';
     registerForm.nickname = '';
+    registerForm.smsCode = '';
     registerForm.password = '';
     registerForm.confirmPassword = '';
     await homeStore.fetchHome();
@@ -685,8 +652,7 @@ async function handleResetPassword() {
   }
 }
 
-function handleLogout(nextRole: LoginRole = 'user') {
-  authMode.value = nextRole;
+function handleLogout() {
   authView.value = 'login';
   mallStore.logout();
   activeTab.value = 'home';
@@ -711,7 +677,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
           <p class="auth-copy">
             {{
               authView === 'login'
-                ? '会员端和管理员端分开登录，会员账号支持注册与密码重置。'
+                ? '会员账号支持密码登录、验证码登录、注册与密码重置。'
                 : authView === 'register'
                   ? '注册时需要二次确认密码，注册成功后会自动登录到会员账号。'
                   : '通过短信验证码验证身份后，可为会员账号重置登录密码。'
@@ -727,51 +693,65 @@ function handleLogout(nextRole: LoginRole = 'user') {
           <button
             type="button"
             class="auth-tab"
-            :class="{ active: authMode === 'user' }"
-            @click="authMode = 'user'"
+            :class="{ active: loginMethod === 'password' }"
+            @click="loginMethod = 'password'"
           >
-            会员登录
+            密码登录
           </button>
           <button
             type="button"
             class="auth-tab"
-            :class="{ active: authMode === 'admin' }"
-            @click="authMode = 'admin'"
+            :class="{ active: loginMethod === 'sms' }"
+            @click="loginMethod = 'sms'"
           >
-            管理员登录
+            验证码登录
           </button>
         </div>
 
         <form
           v-if="authView === 'login'"
           class="auth-form"
-          @submit.prevent="handleLogin(authMode)"
+          @submit.prevent="handleLogin"
         >
           <label class="field">
-            <span>{{ authMode === 'user' ? '手机号 / 账号' : '管理员账号' }}</span>
+            <span>{{ loginMethod === 'password' ? '手机号 / 账号' : '已注册手机号' }}</span>
             <input
-              :value="loginForm[authMode].account"
+              :value="loginForm.account"
               type="text"
-              @input="loginForm[authMode].account = ($event.target as HTMLInputElement).value"
+              @input="loginForm.account = ($event.target as HTMLInputElement).value"
             />
           </label>
-          <label class="field">
+          <label v-if="loginMethod === 'password'" class="field">
             <span>密码</span>
             <input
-              :value="loginForm[authMode].password"
+              :value="loginForm.password"
               type="password"
-              @input="loginForm[authMode].password = ($event.target as HTMLInputElement).value"
+              @input="loginForm.password = ($event.target as HTMLInputElement).value"
             />
           </label>
+          <label v-else class="field">
+            <span>短信验证码</span>
+            <div class="code-row">
+              <input
+                :value="loginForm.smsCode"
+                type="text"
+                maxlength="6"
+                @input="loginForm.smsCode = ($event.target as HTMLInputElement).value"
+              />
+              <button
+                type="button"
+                class="auth-tab"
+                :disabled="loginCountdown > 0"
+                @click="handleSendCode('login')"
+              >
+                {{ loginCountdown > 0 ? `${loginCountdown}s` : '发送验证码' }}
+              </button>
+            </div>
+          </label>
           <button type="submit" class="primary-button wide">
-            {{ authMode === 'user' ? '进入会员商城' : '进入管理后台' }}
+            {{ loginMethod === 'password' ? '进入会员商城' : '验证码登录' }}
           </button>
-          <button
-            v-if="authMode === 'user'"
-            type="button"
-            class="inline-link"
-            @click="switchAuthView('reset')"
-          >
+          <button type="button" class="inline-link" @click="switchAuthView('reset')">
             忘记密码
           </button>
         </form>
@@ -792,6 +772,25 @@ function handleLogout(nextRole: LoginRole = 'user') {
               type="text"
               @input="registerForm.nickname = ($event.target as HTMLInputElement).value"
             />
+          </label>
+          <label class="field">
+            <span>短信验证码</span>
+            <div class="code-row">
+              <input
+                :value="registerForm.smsCode"
+                type="text"
+                maxlength="6"
+                @input="registerForm.smsCode = ($event.target as HTMLInputElement).value"
+              />
+              <button
+                type="button"
+                class="auth-tab"
+                :disabled="registerCountdown > 0"
+                @click="handleSendCode('register')"
+              >
+                {{ registerCountdown > 0 ? `${registerCountdown}s` : '发送验证码' }}
+              </button>
+            </div>
           </label>
           <label class="field">
             <span>密码</span>
@@ -860,7 +859,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
           <button type="submit" class="primary-button wide">重置密码</button>
         </form>
         <div class="auth-notice">
-          <p>会员账号可直接注册，管理员账号由平台统一分配与维护。</p>
+          <p>会员账号可直接注册，登录后即可使用购物、下单、充值和售后等功能。</p>
         </div>
 
         <div class="auth-switches">
@@ -885,75 +884,6 @@ function handleLogout(nextRole: LoginRole = 'user') {
       </section>
     </div>
 
-    <div v-else-if="isAdmin" class="admin-shell">
-      <section class="admin-frame">
-        <header class="admin-topbar">
-          <div>
-            <p class="eyebrow">管理员视图</p>
-            <h1>运营概览</h1>
-            <p class="auth-copy">当前账号：{{ currentUserName }}</p>
-          </div>
-          <div class="header-actions">
-            <button type="button" class="ghost-button" @click="handleLogout('user')">
-              切到会员登录
-            </button>
-            <button type="button" class="primary-button" @click="handleLogout('admin')">
-              退出
-            </button>
-          </div>
-        </header>
-
-        <section class="stats-grid">
-          <article v-for="item in adminStats" :key="item.label" class="stat-card">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
-          </article>
-        </section>
-
-        <section class="section-block admin-console-panel">
-          <div class="section-head compact">
-            <div>
-              <h2>进入真实运营后台</h2>
-              <span>商品、订单、会员、营销等操作都会跳转到正式后台执行</span>
-            </div>
-          </div>
-          <p class="admin-console-copy">
-            当前页面用于快速查看概览，真正可操作的后台位于
-            <strong>{{ adminConsoleLabel }}</strong>
-          </p>
-          <div class="admin-console-actions">
-            <button type="button" class="primary-button" @click="handleOpenAdminConsole">
-              进入真实运营后台
-            </button>
-            <button type="button" class="ghost-button" @click="handleOpenAdminModule('products')">
-              直接打开商品管理
-            </button>
-          </div>
-        </section>
-
-        <section class="section-block">
-          <div class="section-head">
-            <h2>后台模块</h2>
-            <span>点击后会跳转到真实后台的对应管理页面</span>
-          </div>
-          <div class="shortcut-grid">
-            <button
-              v-for="item in adminShortcuts"
-              :key="item.key"
-              type="button"
-              class="shortcut-card"
-              :class="{ active: activeAdminShortcut === item.key }"
-              @click="handleOpenAdminModule(item.key)"
-            >
-              <strong>{{ item.label }}</strong>
-              <span>{{ item.description }}</span>
-              <small>进入 {{ item.label }}</small>
-            </button>
-          </div>
-        </section>
-      </section>
-    </div>
-
     <div v-else class="page-frame">
       <header class="topbar">
         <div>
@@ -966,7 +896,7 @@ function handleLogout(nextRole: LoginRole = 'user') {
             消息
             <span v-if="unreadMessages" class="count-badge">{{ unreadMessages }}</span>
           </button>
-          <button type="button" class="ghost-button" @click="handleLogout('user')">退出</button>
+          <button type="button" class="ghost-button" @click="handleLogout">退出</button>
         </div>
       </header>
 

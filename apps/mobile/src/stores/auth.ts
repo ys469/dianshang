@@ -47,17 +47,25 @@ export const useAuthStore = defineStore('auth', {
       return result;
     },
 
+    async smsLogin(mobile: string, smsCode: string) {
+      const result = await authClient.smsLogin(mobile, smsCode);
+      this.setSession(result.token, result.user);
+      return result;
+    },
+
     async register(
       mobile: string,
       nickname: string,
       password: string,
-      confirmPassword: string
+      confirmPassword: string,
+      smsCode?: string
     ) {
       const result = await authClient.register(
         mobile,
         nickname,
         password,
-        confirmPassword
+        confirmPassword,
+        smsCode
       );
       this.setSession(result.token, result.user);
       return result;

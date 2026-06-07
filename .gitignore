@@ -25,3 +25,5 @@ apps/**/.output/
 apps/**/coverage/
 runtime-logs/
 apps/api/apps/
+apps/api/runtime/*
+!apps/api/runtime/.gitkeep

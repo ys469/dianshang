@@ -127,6 +127,35 @@ describe('/auth', () => {
     expect(newPasswordLogin.body.data.user.nickname).toBe('重置会员');
   });
 
+  it('logs a registered member in with a valid sms code', async () => {
+    const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
+      mobile: '13900000003',
+      nickname: '验证码登录会员',
+      password: 'sms-login-123',
+      confirmPassword: 'sms-login-123'
+    });
+
+    expect(registerResponse.status).toBe(201);
+
+    const loginCodeResponse = await request(app.getHttpServer()).post('/auth/send-sms-code').send({
+      mobile: '13900000003',
+      scene: 'login'
+    });
+
+    expect(loginCodeResponse.status).toBe(200);
+    expect(loginCodeResponse.body.data.scene).toBe('login');
+
+    const smsLoginResponse = await request(app.getHttpServer()).post('/auth/sms-login').send({
+      mobile: '13900000003',
+      smsCode: loginCodeResponse.body.data.debugCode
+    });
+
+    expect(smsLoginResponse.status).toBe(200);
+    expect(smsLoginResponse.body.data.token).toBeTruthy();
+    expect(smsLoginResponse.body.data.user.mobile).toBe('13900000003');
+    expect(smsLoginResponse.body.data.user.nickname).toBe('验证码登录会员');
+  });
+
   it('keeps admin and member permissions separated', async () => {
     const memberLogin = await request(app.getHttpServer()).post('/auth/login').send({
       role: 'user',

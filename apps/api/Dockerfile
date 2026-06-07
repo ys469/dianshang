@@ -27,6 +27,7 @@ RUN npm ci --omit=dev --workspace apps/api --workspace packages/shared
 COPY --from=builder /app/apps/api/dist apps/api/dist
 COPY --from=builder /app/packages/shared/dist packages/shared/dist
 COPY apps/api/.env.example apps/api/.env.example
+COPY apps/api/runtime apps/api/runtime
 
 EXPOSE 3000
 
