@@ -25,5 +25,7 @@ apps/**/.output/
 apps/**/coverage/
 runtime-logs/
 apps/api/apps/
+.codex-temp/
+codex-smart-member-mall.bundle
 apps/api/runtime/*
 !apps/api/runtime/.gitkeep

@@ -183,4 +183,23 @@ const systemStatus = [
   color: #64748b;
   margin-left: auto;
 }
+
+@media (max-width: 960px) {
+  .quick-grid,
+  .status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .quick-card {
+    align-items: flex-start;
+    padding: 16px;
+  }
+
+  .quick-icon {
+    width: 36px;
+    font-size: 24px;
+  }
+}
 </style>

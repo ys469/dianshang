@@ -23,6 +23,7 @@ type FinanceRange = 'today' | 'week' | 'month';
 type PaymentMethod = 'balance' | 'wechat';
 type PaymentChannel = 'balance' | 'native' | 'h5';
 type PaymentState = 'pending' | 'success' | 'failed' | 'closed';
+type PricingSourceType = 'catalog' | 'flash_sale' | 'group_buying';
 const ORDER_CANCEL_WINDOW_MS = 3 * 60 * 1000;
 const RUNTIME_STATE_KEY = 'mall_state';
 
@@ -49,6 +50,8 @@ interface OrderItemRecord {
   quantity: number;
   price: number;
   memberPrice: number;
+  pricingSourceType: string;
+  pricingContextId?: string | null;
 }
 
 interface OrderRecord {
@@ -69,6 +72,9 @@ interface OrderRecord {
   memberId: string | null;
   createdAt: string;
   cancelledAt: string | null;
+  couponId: string | null;
+  couponTitle: string | null;
+  couponDiscount: number;
   logisticsCompany: string | null;
   trackingNo: string | null;
   shippedAt: string | null;
@@ -203,7 +209,14 @@ interface UpdateProductInput {
 interface CreateOrderInput {
   fulfillmentMode: 'delivery' | 'pickup';
   paymentMethod?: PaymentMethod;
-  items: Array<{ productId: string; quantity: number }>;
+  couponId?: string;
+  items: Array<{
+    productId: string;
+    quantity: number;
+    pricingSourceType?: string;
+    pricingContextId?: string;
+    expectedUnitPrice?: number;
+  }>;
   customerName: string;
   customerMobile: string;
   address: string;
@@ -409,32 +422,64 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
 
   getHomePayload() {
     const featuredProductIds = new Set<string>();
+    const flashSaleProducts: Array<ReturnType<typeof this.toMarketingProductView>> = [];
+    const seenFlashSaleProducts = new Set<string>();
 
-    const flashSaleProducts = this.flashSales
-      .filter((item) => item.status === '进行中' && item.enabled)
-      .slice(0, 6)
-      .map((activity) => {
-        const view = this.toMarketingProductView(activity.productId, activity.price, ['秒杀']);
-        if (view) {
-          featuredProductIds.add(activity.productId);
-        }
-        return view;
-      })
-      .filter(Boolean);
+    for (const activity of this.flashSales) {
+      if (
+        activity.status !== '进行中' ||
+        !activity.enabled ||
+        activity.stock <= activity.sold ||
+        seenFlashSaleProducts.has(activity.productId)
+      ) {
+        continue;
+      }
 
-    const groupBuyProducts = this.groupBuys
-      .filter((item) => item.status === '进行中' && item.enabled)
-      .slice(0, 6)
-      .map((activity) => {
-        const view = this.toMarketingProductView(activity.productId, activity.price, [
-          `${activity.groupSize}人团`
-        ]);
-        if (view) {
-          featuredProductIds.add(activity.productId);
-        }
-        return view;
-      })
-      .filter(Boolean);
+      const view = this.toMarketingProductView(
+        activity.productId,
+        activity.price,
+        ['秒杀'],
+        'flash_sale',
+        activity.id
+      );
+      if (view) {
+        flashSaleProducts.push(view);
+        featuredProductIds.add(activity.productId);
+        seenFlashSaleProducts.add(activity.productId);
+      }
+      if (flashSaleProducts.length >= 6) {
+        break;
+      }
+    }
+
+    const groupBuyProducts: Array<ReturnType<typeof this.toMarketingProductView>> = [];
+    const seenGroupBuyProducts = new Set<string>();
+
+    for (const activity of this.groupBuys) {
+      if (
+        activity.status !== '进行中' ||
+        !activity.enabled ||
+        seenGroupBuyProducts.has(activity.productId)
+      ) {
+        continue;
+      }
+
+      const view = this.toMarketingProductView(
+        activity.productId,
+        activity.price,
+        [`${activity.groupSize}人团`],
+        'group_buying',
+        activity.id
+      );
+      if (view) {
+        groupBuyProducts.push(view);
+        featuredProductIds.add(activity.productId);
+        seenGroupBuyProducts.add(activity.productId);
+      }
+      if (groupBuyProducts.length >= 6) {
+        break;
+      }
+    }
 
     const memberProducts = this.products
       .filter(
@@ -643,12 +688,281 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private getActiveFlashSalePrice(productId: string) {
+    const flashSale = this.getActiveFlashSales(productId)[0];
+
+    return flashSale ? roundMoney(flashSale.price) : null;
+  }
+
+  private getActiveGroupBuyPrice(productId: string) {
+    const groupBuy = this.getActiveGroupBuys(productId)[0];
+
+    return groupBuy ? roundMoney(groupBuy.price) : null;
+  }
+
+  private getActiveFlashSales(productId: string) {
+    return this.flashSales.filter(
+      (activity) =>
+        activity.productId === productId &&
+        activity.enabled &&
+        activity.status === '进行中' &&
+        activity.stock > activity.sold
+    );
+  }
+
+  private getActiveGroupBuys(productId: string) {
+    return this.groupBuys.filter(
+      (activity) =>
+        activity.productId === productId && activity.enabled && activity.status === '进行中'
+    );
+  }
+
+  private findMatchingFlashSale(
+    productId: string,
+    pricingContextId: string | undefined,
+    expectedUnitPrice: number | null
+  ) {
+    const activeFlashSales = this.getActiveFlashSales(productId);
+
+    if (pricingContextId) {
+      return activeFlashSales.find((activity) => activity.id === pricingContextId) ?? null;
+    }
+
+    if (expectedUnitPrice !== null) {
+      return (
+        activeFlashSales.find((activity) => roundMoney(activity.price) === expectedUnitPrice) ??
+        null
+      );
+    }
+
+    return activeFlashSales[0] ?? null;
+  }
+
+  private findMatchingGroupBuy(
+    productId: string,
+    pricingContextId: string | undefined,
+    expectedUnitPrice: number | null
+  ) {
+    const activeGroupBuys = this.getActiveGroupBuys(productId);
+
+    if (pricingContextId) {
+      return activeGroupBuys.find((activity) => activity.id === pricingContextId) ?? null;
+    }
+
+    if (expectedUnitPrice !== null) {
+      return (
+        activeGroupBuys.find((activity) => roundMoney(activity.price) === expectedUnitPrice) ??
+        null
+      );
+    }
+
+    return activeGroupBuys[0] ?? null;
+  }
+
+  private pauseOtherFlashSales(productId: string, keepFlashSaleId: string) {
+    for (const activity of this.flashSales) {
+      if (activity.productId !== productId || activity.id === keepFlashSaleId || !activity.enabled) {
+        continue;
+      }
+
+      activity.enabled = false;
+      activity.status = '已暂停';
+    }
+  }
+
+  private pauseOtherGroupBuys(productId: string, keepGroupBuyId: string) {
+    for (const activity of this.groupBuys) {
+      if (activity.productId !== productId || activity.id === keepGroupBuyId || !activity.enabled) {
+        continue;
+      }
+
+      activity.enabled = false;
+      activity.status = '已暂停';
+    }
+  }
+
+  private normalizeExpectedUnitPrice(expectedUnitPrice?: number) {
+    if (expectedUnitPrice === undefined || expectedUnitPrice === null) {
+      return null;
+    }
+
+    const numericPrice = Number(expectedUnitPrice);
+    if (!Number.isFinite(numericPrice) || numericPrice < 0) {
+      throw new BadRequestException('\u8ba2\u5355\u4ef7\u683c\u4fe1\u606f\u65e0\u6548');
+    }
+
+    return roundMoney(numericPrice);
+  }
+
+  private createPriceChangedError(productName: string) {
+    return new BadRequestException(
+      `${productName} \u4ef7\u683c\u5df2\u53d8\u52a8\uff0c\u8bf7\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5`
+    );
+  }
+
+  private createMissingPricingMetadataError(productName: string) {
+    return new BadRequestException(
+      `${productName} \u5b58\u5728\u591a\u79cd\u6709\u6548\u4ef7\u683c\uff0c\u8bf7\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5`
+    );
+  }
+
+  private resolveCheckoutPricing(
+    product: ProductRecord,
+    pricingSourceType?: string,
+    pricingContextId?: string,
+    expectedUnitPrice?: number
+  ) {
+    const catalogPrice = roundMoney(product.memberPrice);
+    const normalizedExpectedUnitPrice = this.normalizeExpectedUnitPrice(expectedUnitPrice);
+    const flashSale = this.findMatchingFlashSale(
+      product.id,
+      pricingContextId,
+      normalizedExpectedUnitPrice
+    );
+    const groupBuy = this.findMatchingGroupBuy(
+      product.id,
+      pricingContextId,
+      normalizedExpectedUnitPrice
+    );
+    const flashSalePrice = flashSale ? roundMoney(flashSale.price) : null;
+    const groupBuyPrice = groupBuy ? roundMoney(groupBuy.price) : null;
+
+    if (pricingSourceType === 'flash_sale') {
+      if (flashSalePrice === null) {
+        throw new BadRequestException(
+          `${product.name} \u6d3b\u52a8\u4ef7\u5df2\u5931\u6548\uff0c\u8bf7\u5237\u65b0\u540e\u91cd\u65b0\u4e0b\u5355`
+        );
+      }
+      if (
+        normalizedExpectedUnitPrice !== null &&
+        normalizedExpectedUnitPrice !== flashSalePrice
+      ) {
+        throw this.createPriceChangedError(product.name);
+      }
+
+      return {
+        memberPrice: flashSalePrice,
+        pricingSourceType: 'flash_sale' as PricingSourceType,
+        pricingContextId: flashSale?.id ?? null
+      };
+    }
+
+    if (pricingSourceType === 'group_buying') {
+      if (groupBuyPrice === null) {
+        throw new BadRequestException(
+          `${product.name} \u6d3b\u52a8\u4ef7\u5df2\u5931\u6548\uff0c\u8bf7\u5237\u65b0\u540e\u91cd\u65b0\u4e0b\u5355`
+        );
+      }
+      if (
+        normalizedExpectedUnitPrice !== null &&
+        normalizedExpectedUnitPrice !== groupBuyPrice
+      ) {
+        throw this.createPriceChangedError(product.name);
+      }
+
+      return {
+        memberPrice: groupBuyPrice,
+        pricingSourceType: 'group_buying' as PricingSourceType,
+        pricingContextId: groupBuy?.id ?? null
+      };
+    }
+
+    if (pricingSourceType) {
+      if (
+        normalizedExpectedUnitPrice !== null &&
+        normalizedExpectedUnitPrice !== catalogPrice
+      ) {
+        throw this.createPriceChangedError(product.name);
+      }
+
+      return {
+        memberPrice: catalogPrice,
+        pricingSourceType: 'catalog' as PricingSourceType,
+        pricingContextId: null
+      };
+    }
+
+    if (normalizedExpectedUnitPrice !== null) {
+      if (flashSalePrice !== null && normalizedExpectedUnitPrice === flashSalePrice) {
+        return {
+          memberPrice: flashSalePrice,
+          pricingSourceType: 'flash_sale' as PricingSourceType,
+          pricingContextId: flashSale?.id ?? null
+        };
+      }
+
+      if (groupBuyPrice !== null && normalizedExpectedUnitPrice === groupBuyPrice) {
+        return {
+          memberPrice: groupBuyPrice,
+          pricingSourceType: 'group_buying' as PricingSourceType,
+          pricingContextId: groupBuy?.id ?? null
+        };
+      }
+
+      if (normalizedExpectedUnitPrice === catalogPrice) {
+        return {
+          memberPrice: catalogPrice,
+          pricingSourceType: 'catalog' as PricingSourceType,
+          pricingContextId: null
+        };
+      }
+
+      throw this.createPriceChangedError(product.name);
+    }
+
+    const hasAlternativePrice =
+      this.getActiveFlashSales(product.id).some(
+        (activity) => roundMoney(activity.price) !== catalogPrice
+      ) ||
+      this.getActiveGroupBuys(product.id).some(
+        (activity) => roundMoney(activity.price) !== catalogPrice
+      );
+
+    if (hasAlternativePrice) {
+      throw this.createMissingPricingMetadataError(product.name);
+    }
+
+    return {
+      memberPrice: catalogPrice,
+      pricingSourceType: 'catalog' as PricingSourceType,
+      pricingContextId: null
+    };
+  }
+
+  private getCouponForCheckout(
+    member: MemberRecord,
+    couponId: string | undefined,
+    orderAmount: number
+  ) {
+    if (!couponId) {
+      return null;
+    }
+
+    if (member.coupons <= 0) {
+      throw new BadRequestException('\u5f53\u524d\u8d26\u6237\u6ca1\u6709\u53ef\u7528\u4f18\u60e0\u5238');
+    }
+
+    const coupon = this.coupons.find((item) => item.id === couponId);
+    if (!coupon || !coupon.enabled || coupon.used >= coupon.total) {
+      throw new BadRequestException('\u8be5\u4f18\u60e0\u5238\u6682\u65f6\u4e0d\u53ef\u7528');
+    }
+
+    if (orderAmount < coupon.threshold) {
+      throw new BadRequestException(
+        `\u8ba2\u5355\u6ee1 ${coupon.threshold} \u5143\u540e\u624d\u80fd\u4f7f\u7528\u8be5\u4f18\u60e0\u5238`
+      );
+    }
+
+    return coupon;
+  }
+
   createOrder(input: CreateOrderInput) {
     if (!input.items.length) {
       throw new BadRequestException('下单商品不能为空');
     }
 
-    const items = input.items.map(({ productId, quantity }) => {
+    const items = input.items.map(
+      ({ productId, quantity, pricingSourceType, pricingContextId, expectedUnitPrice }) => {
       const product = this.products.find((item) => item.id === productId);
       if (!product) {
         throw new NotFoundException(`商品 ${productId} 不存在`);
@@ -660,9 +974,19 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException(`${product.name} 已下架，暂时不能购买`);
       }
 
+      const pricing = this.resolveCheckoutPricing(
+        product,
+        pricingSourceType,
+        pricingContextId,
+        expectedUnitPrice
+      );
+
       return {
         product,
-        quantity
+        quantity,
+        memberPrice: pricing.memberPrice,
+        pricingSourceType: pricing.pricingSourceType,
+        pricingContextId: pricing.pricingContextId
       };
     });
 
@@ -676,9 +1000,12 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     const totalAmount = roundMoney(
       items.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
     );
-    const payableAmount = roundMoney(
-      items.reduce((sum, item) => sum + item.product.memberPrice * item.quantity, 0)
+    const beforeCouponAmount = roundMoney(
+      items.reduce((sum, item) => sum + item.memberPrice * item.quantity, 0)
     );
+    const appliedCoupon = this.getCouponForCheckout(member, input.couponId, beforeCouponAmount);
+    const couponDiscount = roundMoney(Math.min(appliedCoupon?.discount ?? 0, beforeCouponAmount));
+    const payableAmount = roundMoney(beforeCouponAmount - couponDiscount);
     const paymentMethod = input.paymentMethod ?? 'balance';
     const createdAt = new Date().toISOString();
 
@@ -704,6 +1031,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       memberId: member.id,
       createdAt,
       cancelledAt: null,
+      couponId: appliedCoupon?.id ?? null,
+      couponTitle: appliedCoupon?.title ?? null,
+      couponDiscount,
       logisticsCompany: null,
       trackingNo: null,
       shippedAt: null,
@@ -713,9 +1043,16 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
         productName: item.product.name,
         quantity: item.quantity,
         price: item.product.price,
-        memberPrice: item.product.memberPrice
+        memberPrice: item.memberPrice,
+        pricingSourceType: item.pricingSourceType,
+        pricingContextId: item.pricingContextId
       }))
     };
+
+    if (appliedCoupon) {
+      appliedCoupon.used += 1;
+      member.coupons = Math.max(0, member.coupons - 1);
+    }
 
     this.orders.unshift(order);
 
@@ -781,6 +1118,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
 
   cancelOrder(orderNo: string) {
     const order = this.orders.find((item) => item.orderNo === orderNo);
+    let couponMember: MemberRecord | null = null;
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
@@ -800,8 +1138,10 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
           authUserId: null,
           nickname: order.customerName,
           mobile: order.customerMobile,
-        memberLevel: '普通会员'
+          memberLevel: '普通会员'
         });
+
+      couponMember = member;
 
       for (const item of order.items) {
         const product = this.products.find((entry) => entry.id === item.productId);
@@ -812,7 +1152,13 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
         product.stock += item.quantity;
         product.sales = Math.max(0, product.sales - item.quantity);
 
-        const flashSale = this.flashSales.find((activity) => activity.productId === product.id);
+        const flashSale =
+          item.pricingSourceType === 'flash_sale'
+            ? this.flashSales.find(
+                (activity) =>
+                  activity.id === item.pricingContextId || activity.productId === product.id
+              )
+            : null;
         if (flashSale) {
           flashSale.stock += item.quantity;
           flashSale.sold = Math.max(0, flashSale.sold - item.quantity);
@@ -821,7 +1167,13 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
-        const groupBuy = this.groupBuys.find((activity) => activity.productId === product.id);
+        const groupBuy =
+          item.pricingSourceType === 'group_buying'
+            ? this.groupBuys.find(
+                (activity) =>
+                  activity.id === item.pricingContextId || activity.productId === product.id
+              )
+            : null;
         if (groupBuy) {
           groupBuy.completed = Math.max(
             0,
@@ -853,6 +1205,24 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
         memberId: member.id,
         detail: `${member.nickname} \u64a4\u56de\u8ba2\u5355 ${order.orderNo}`
       });
+    }
+
+    if (order.couponId) {
+      const member =
+        couponMember ??
+        this.members.find((item) => item.id === order.memberId) ??
+        this.ensureMemberProfile({
+          authUserId: null,
+          nickname: order.customerName,
+          mobile: order.customerMobile,
+          memberLevel: '普通会员'
+        });
+      const coupon = this.coupons.find((item) => item.id === order.couponId);
+
+      member.coupons += 1;
+      if (coupon) {
+        coupon.used = Math.max(0, coupon.used - 1);
+      }
     }
 
     order.paymentState = 'closed';
@@ -912,9 +1282,15 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       product.stock -= item.quantity;
       product.sales += item.quantity;
 
-      const flashSale = this.flashSales.find(
-        (activity) => activity.productId === product.id && activity.status === '进行中'
-      );
+      const flashSale =
+        item.pricingSourceType === 'flash_sale'
+          ? this.flashSales.find(
+              (activity) =>
+                (activity.id === item.pricingContextId ||
+                  activity.productId === product.id) &&
+                activity.status === '进行中'
+            )
+          : null;
       if (flashSale) {
         flashSale.stock = Math.max(0, flashSale.stock - item.quantity);
         flashSale.sold += item.quantity;
@@ -923,9 +1299,15 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      const groupBuy = this.groupBuys.find(
-        (activity) => activity.productId === product.id && activity.status === '进行中'
-      );
+      const groupBuy =
+        item.pricingSourceType === 'group_buying'
+          ? this.groupBuys.find(
+              (activity) =>
+                (activity.id === item.pricingContextId ||
+                  activity.productId === product.id) &&
+                activity.status === '进行中'
+            )
+          : null;
       if (groupBuy) {
         groupBuy.completed += Math.max(1, Math.ceil(item.quantity / groupBuy.groupSize));
       }
@@ -989,6 +1371,23 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
         (order) => order.memberId === member.id || order.customerMobile === member.mobile
       )
       .map((order) => this.toAdminOrder(order));
+  }
+
+  getCouponsForMember(authUserId?: string | null, mobile?: string | null) {
+    const member = this.findMember(authUserId ?? null, mobile ?? null);
+    const remainingCount = member?.coupons ?? 0;
+
+    return this.coupons
+      .filter((coupon) => coupon.enabled && coupon.used < coupon.total)
+      .map((coupon) => ({
+        id: coupon.id,
+        title: coupon.title,
+        threshold: coupon.threshold,
+        discount: coupon.discount,
+        status: coupon.status,
+        enabled: coupon.enabled,
+        remainingCount
+      }));
   }
 
   getAdminOrders() {
@@ -1527,6 +1926,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     };
 
     this.flashSales.unshift(flashSale);
+    this.pauseOtherFlashSales(product.id, flashSale.id);
     this.persistState();
     return {
       ...flashSale,
@@ -1554,6 +1954,10 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     }
     if (input.enabled !== undefined) {
       flashSale.enabled = input.enabled;
+    }
+
+    if (flashSale.enabled) {
+      this.pauseOtherFlashSales(flashSale.productId, flashSale.id);
     }
 
     flashSale.status = !flashSale.enabled
@@ -1603,6 +2007,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     };
 
     this.groupBuys.unshift(groupBuy);
+    this.pauseOtherGroupBuys(product.id, groupBuy.id);
     this.persistState();
     return {
       ...groupBuy,
@@ -1630,6 +2035,10 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     }
     if (input.enabled !== undefined) {
       groupBuy.enabled = input.enabled;
+    }
+
+    if (groupBuy.enabled) {
+      this.pauseOtherGroupBuys(groupBuy.productId, groupBuy.id);
     }
 
     groupBuy.status = groupBuy.enabled ? '进行中' : '已暂停';
@@ -1852,7 +2261,8 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
           productName: product.name,
           quantity: 1,
           price: product.price,
-          memberPrice: product.memberPrice
+          memberPrice: product.memberPrice,
+          pricingSourceType: 'catalog'
         };
       });
 
@@ -1887,6 +2297,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
         memberId: 'u-001',
         createdAt: createIso(index),
         cancelledAt: null,
+        couponId: null,
+        couponTitle: null,
+        couponDiscount: 0,
         logisticsCompany: null,
         trackingNo: null,
         shippedAt: null,
@@ -2058,11 +2471,17 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       if (parsed.orders) {
         this.orders = parsed.orders.map((item) => ({
           ...item,
+          couponId: item.couponId ?? null,
+          couponTitle: item.couponTitle ?? null,
+          couponDiscount: item.couponDiscount ?? 0,
           logisticsCompany: item.logisticsCompany ?? null,
           trackingNo: item.trackingNo ?? null,
           shippedAt: item.shippedAt ?? null,
           completedAt: item.completedAt ?? null,
-          items: item.items.map((orderItem) => ({ ...orderItem }))
+          items: item.items.map((orderItem) => ({
+            ...orderItem,
+            pricingSourceType: orderItem.pricingSourceType ?? 'catalog'
+          }))
         }));
       }
 
@@ -2216,11 +2635,17 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     if (parsed.orders) {
       this.orders = parsed.orders.map((item) => ({
         ...item,
+        couponId: item.couponId ?? null,
+        couponTitle: item.couponTitle ?? null,
+        couponDiscount: item.couponDiscount ?? 0,
         logisticsCompany: item.logisticsCompany ?? null,
         trackingNo: item.trackingNo ?? null,
         shippedAt: item.shippedAt ?? null,
         completedAt: item.completedAt ?? null,
-        items: item.items.map((orderItem) => ({ ...orderItem }))
+        items: item.items.map((orderItem) => ({
+          ...orderItem,
+          pricingSourceType: orderItem.pricingSourceType ?? 'catalog'
+        }))
       }));
     }
 
@@ -2257,7 +2682,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
   }
 
   private getRuntimeStateFilePath() {
-    return resolve(process.env.RUNTIME_DATA_FILE ?? 'apps/api/runtime/runtime-data.json');
+    return process.env.RUNTIME_DATA_FILE?.trim()
+      ? resolve(process.env.RUNTIME_DATA_FILE)
+      : resolve(__dirname, '../../../runtime/runtime-data.json');
   }
 
   private getPool() {
@@ -2282,11 +2709,19 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       image: product.image,
       tags: [...product.tags],
       listed: product.listed,
-      updatedAt: product.updatedAt
+      updatedAt: product.updatedAt,
+      pricingSourceType: 'catalog' as PricingSourceType,
+      pricingContextId: null as string | null
     };
   }
 
-  private toMarketingProductView(productId: string, memberPrice: number, extraTags: string[]) {
+  private toMarketingProductView(
+    productId: string,
+    memberPrice: number,
+    extraTags: string[],
+    pricingSourceType: PricingSourceType = 'catalog',
+    pricingContextId: string | null = null
+  ) {
     const product = this.products.find((item) => item.id === productId);
     if (!product || !product.listed) {
       return null;
@@ -2295,6 +2730,8 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     return {
       ...this.toProductView(product),
       memberPrice: roundMoney(memberPrice),
+      pricingSourceType,
+      pricingContextId,
       tags: uniqueTags([...product.tags, ...extraTags])
     };
   }
@@ -2323,6 +2760,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       createdAt: order.createdAt,
       cancelDeadlineAt,
       cancelledAt: order.cancelledAt,
+      couponId: order.couponId,
+      couponTitle: order.couponTitle,
+      couponDiscount: order.couponDiscount,
       logisticsCompany: order.logisticsCompany,
       trackingNo: order.trackingNo,
       shippedAt: order.shippedAt,

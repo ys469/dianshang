@@ -165,7 +165,14 @@ describe('/payments/wechat', () => {
         consignee: 'Luna Zhang',
         mobile: '13911112222',
         address: 'Shanghai Pudong Jinke Rd 1888 Building 2 Room 803',
-        items: [{ productId: 'p-001', quantity: 1 }]
+        items: [
+          {
+            productId: 'p-001',
+            quantity: 1,
+            pricingSourceType: 'catalog',
+            expectedUnitPrice: 49.9
+          }
+        ]
       });
 
     expect(createOrder.status).toBe(201);
@@ -285,7 +292,14 @@ describe('/payments/wechat', () => {
         consignee: 'Mobile Buyer',
         mobile: '13922223333',
         address: 'Shenzhen Nanshan Hi-Tech Park 1001',
-        items: [{ productId: 'p-002', quantity: 1 }]
+        items: [
+          {
+            productId: 'p-002',
+            quantity: 1,
+            pricingSourceType: 'catalog',
+            expectedUnitPrice: 32.9
+          }
+        ]
       });
 
     expect(createOrder.status).toBe(201);

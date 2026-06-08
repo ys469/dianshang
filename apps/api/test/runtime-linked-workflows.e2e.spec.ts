@@ -79,7 +79,14 @@ describe('/runtime linked workflows', () => {
         consignee: '李四',
         mobile: '13800138000',
         address: '上海市浦东新区金科路 1888 号 2 栋 803',
-        items: [{ productId: 'p-003', quantity: 1 }]
+        items: [
+          {
+            productId: 'p-003',
+            quantity: 1,
+            pricingSourceType: 'catalog',
+            expectedUnitPrice: 109
+          }
+        ]
       });
 
     expect(createOrder.status).toBe(201);

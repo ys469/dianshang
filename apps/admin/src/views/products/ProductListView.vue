@@ -27,6 +27,12 @@ type ProductFormState = {
   listed: boolean;
 };
 
+type ImageTarget = 'create' | 'edit';
+
+const MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_EDGE = 1280;
+const IMAGE_OUTPUT_QUALITY = 0.84;
+
 const products = ref<AdminProduct[]>([]);
 const loading = ref(true);
 const creating = ref(false);
@@ -36,6 +42,8 @@ const errorMsg = ref('');
 const successMsg = ref('');
 const searchKeyword = ref('');
 const statusFilter = ref<ProductStatusFilter>('all');
+const createImageInput = ref<HTMLInputElement | null>(null);
+const editImageInput = ref<HTMLInputElement | null>(null);
 
 const createForm = reactive<ProductFormState>({
   categoryId: 'food',
@@ -78,6 +86,143 @@ function normalizeTags(tagsText: string) {
     .split(/[,\uFF0C]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function getFormByTarget(target: ImageTarget) {
+  return target === 'create' ? createForm : editForm;
+}
+
+function getImageInputByTarget(target: ImageTarget) {
+  return target === 'create' ? createImageInput.value : editImageInput.value;
+}
+
+function setImageValue(target: ImageTarget, value: string) {
+  getFormByTarget(target).image = value;
+}
+
+function clearImage(target: ImageTarget) {
+  setImageValue(target, '');
+}
+
+function openImagePicker(target: ImageTarget) {
+  getImageInputByTarget(target)?.click();
+}
+
+function validateImageFile(file: File) {
+  if (!file.type.startsWith('image/')) {
+    return '请粘贴或选择图片文件。';
+  }
+
+  if (file.size > MAX_IMAGE_SIZE_BYTES) {
+    return '图片不能超过 2MB，请压缩后再上传。';
+  }
+
+  return '';
+}
+
+function readImageAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error('图片读取失败，请重试。'));
+    };
+
+    reader.onerror = () => {
+      reject(new Error('图片读取失败，请重试。'));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('图片解析失败，请更换后重试。'));
+    image.src = src;
+  });
+}
+
+async function compressImageDataUrl(dataUrl: string) {
+  const image = await loadImageElement(dataUrl);
+  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(image.width, image.height));
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement('canvas');
+
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    return dataUrl;
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL('image/webp', IMAGE_OUTPUT_QUALITY);
+}
+
+async function applyImageFile(file: File, target: ImageTarget) {
+  const validationMessage = validateImageFile(file);
+
+  if (validationMessage) {
+    errorMsg.value = validationMessage;
+    successMsg.value = '';
+    return;
+  }
+
+  try {
+    const rawDataUrl = await readImageAsDataUrl(file);
+    const compressedDataUrl = await compressImageDataUrl(rawDataUrl);
+
+    setImageValue(target, compressedDataUrl);
+    errorMsg.value = '';
+    successMsg.value = '商品图片已更新，保存商品后前台会同步显示。';
+  } catch (error) {
+    errorMsg.value = error instanceof Error ? error.message : '处理商品图片失败，请稍后重试。';
+    successMsg.value = '';
+  }
+}
+
+async function handleImageFileChange(event: Event, target: ImageTarget) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+
+  if (file) {
+    await applyImageFile(file, target);
+  }
+
+  input.value = '';
+}
+
+async function handleImagePaste(event: ClipboardEvent, target: ImageTarget) {
+  const items = Array.from(event.clipboardData?.items ?? []);
+  const imageItem = items.find((item) => item.type.startsWith('image/'));
+
+  if (!imageItem) {
+    errorMsg.value = '剪贴板里没有图片，请先复制截图或图片。';
+    successMsg.value = '';
+    return;
+  }
+
+  const file = imageItem.getAsFile();
+
+  if (!file) {
+    errorMsg.value = '当前图片无法读取，请重新复制后再试。';
+    successMsg.value = '';
+    return;
+  }
+
+  await applyImageFile(file, target);
 }
 
 function resetCreateForm() {
@@ -332,12 +477,12 @@ function formatDateTime(value: string) {
         </div>
 
         <div class="form-grid">
-          <label>
+          <label class="wide">
             <span>商品名称</span>
             <input v-model="createForm.name" type="text" placeholder="输入商品名称" />
           </label>
 
-          <label>
+          <label class="compact-field">
             <span>所属分类</span>
             <select v-model="createForm.categoryId">
               <option v-for="item in categoryOptions" :key="item.value" :value="item.value">
@@ -346,7 +491,7 @@ function formatDateTime(value: string) {
             </select>
           </label>
 
-          <label>
+          <label class="compact-field">
             <span>初始库存</span>
             <input v-model="createForm.stock" type="number" min="0" step="1" />
           </label>
@@ -356,10 +501,34 @@ function formatDateTime(value: string) {
             <input v-model="createForm.subtitle" type="text" placeholder="例如：门店爆款、会员专享、节日礼盒" />
           </label>
 
-          <label class="wide">
+          <div class="wide image-field">
             <span>商品图片</span>
-            <input v-model="createForm.image" type="url" placeholder="输入商品图片 URL" />
-          </label>
+            <div class="image-uploader" tabindex="0" @paste.prevent="handleImagePaste($event, 'create')">
+              <div v-if="createForm.image" class="image-preview-shell">
+                <img :src="createForm.image" alt="新增商品图片预览" class="image-preview" />
+              </div>
+              <p class="image-helper-title">{{ createForm.image ? '已选择商品图片' : '直接粘贴商品图片' }}</p>
+              <p class="image-helper-text">支持 Ctrl+V 粘贴截图或复制的图片，也可以从本地选择图片。</p>
+              <div class="image-actions">
+                <button type="button" class="ghost-btn" @click="openImagePicker('create')">选择本地图片</button>
+                <button
+                  v-if="createForm.image"
+                  type="button"
+                  class="danger-btn"
+                  @click="clearImage('create')"
+                >
+                  清空图片
+                </button>
+              </div>
+              <input
+                ref="createImageInput"
+                class="visually-hidden"
+                type="file"
+                accept="image/*"
+                @change="handleImageFileChange($event, 'create')"
+              />
+            </div>
+          </div>
 
           <label class="wide">
             <span>商品简介</span>
@@ -370,22 +539,22 @@ function formatDateTime(value: string) {
             />
           </label>
 
-          <label>
+          <label class="compact-field">
             <span>销售价</span>
             <input v-model="createForm.price" type="number" min="0" step="0.1" />
           </label>
 
-          <label>
+          <label class="compact-field">
             <span>会员价</span>
             <input v-model="createForm.memberPrice" type="number" min="0" step="0.1" />
           </label>
 
-          <label>
+          <label class="wide">
             <span>标签</span>
             <input v-model="createForm.tagsText" type="text" placeholder="用逗号分隔，如：新品,爆款" />
           </label>
 
-          <label class="checkbox-field">
+          <label class="checkbox-field wide">
             <input v-model="createForm.listed" type="checkbox" />
             <span>创建后立即上架</span>
           </label>
@@ -405,12 +574,12 @@ function formatDateTime(value: string) {
         </div>
 
         <div class="form-grid">
-          <label>
+          <label class="wide">
             <span>商品名称</span>
             <input v-model="editForm.name" type="text" />
           </label>
 
-          <label>
+          <label class="compact-field">
             <span>所属分类</span>
             <select v-model="editForm.categoryId">
               <option v-for="item in categoryOptions" :key="item.value" :value="item.value">
@@ -419,7 +588,7 @@ function formatDateTime(value: string) {
             </select>
           </label>
 
-          <label>
+          <label class="compact-field">
             <span>当前库存</span>
             <input v-model="editForm.stock" type="number" min="0" step="1" />
           </label>
@@ -429,32 +598,56 @@ function formatDateTime(value: string) {
             <input v-model="editForm.subtitle" type="text" />
           </label>
 
-          <label class="wide">
+          <div class="wide image-field">
             <span>商品图片</span>
-            <input v-model="editForm.image" type="url" />
-          </label>
+            <div class="image-uploader" tabindex="0" @paste.prevent="handleImagePaste($event, 'edit')">
+              <div v-if="editForm.image" class="image-preview-shell">
+                <img :src="editForm.image" alt="编辑商品图片预览" class="image-preview" />
+              </div>
+              <p class="image-helper-title">{{ editForm.image ? '已选择商品图片' : '直接粘贴商品图片' }}</p>
+              <p class="image-helper-text">支持 Ctrl+V 粘贴截图或复制的图片，也可以从本地选择图片。</p>
+              <div class="image-actions">
+                <button type="button" class="ghost-btn" @click="openImagePicker('edit')">选择本地图片</button>
+                <button
+                  v-if="editForm.image"
+                  type="button"
+                  class="danger-btn"
+                  @click="clearImage('edit')"
+                >
+                  清空图片
+                </button>
+              </div>
+              <input
+                ref="editImageInput"
+                class="visually-hidden"
+                type="file"
+                accept="image/*"
+                @change="handleImageFileChange($event, 'edit')"
+              />
+            </div>
+          </div>
 
           <label class="wide">
             <span>商品简介</span>
             <textarea v-model="editForm.description" rows="4" />
           </label>
 
-          <label>
+          <label class="compact-field">
             <span>销售价</span>
             <input v-model="editForm.price" type="number" min="0" step="0.1" />
           </label>
 
-          <label>
+          <label class="compact-field">
             <span>会员价</span>
             <input v-model="editForm.memberPrice" type="number" min="0" step="0.1" />
           </label>
 
-          <label>
+          <label class="wide">
             <span>标签</span>
             <input v-model="editForm.tagsText" type="text" />
           </label>
 
-          <label class="checkbox-field">
+          <label class="checkbox-field wide">
             <input v-model="editForm.listed" type="checkbox" />
             <span>保持上架</span>
           </label>
@@ -644,18 +837,87 @@ function formatDateTime(value: string) {
   gap: 14px;
 }
 
-.form-grid label {
+.form-grid > label,
+.form-grid > .image-field {
   display: grid;
   gap: 8px;
 }
 
-.form-grid label.wide {
+.form-grid > .wide {
   grid-column: span 3;
+}
+
+.form-grid > .compact-field {
+  min-width: 0;
 }
 
 .form-grid span {
   font-size: 13px;
   color: #374151;
+}
+
+.image-uploader {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px dashed #c4b5fd;
+  border-radius: 10px;
+  background: #faf8ff;
+  outline: none;
+}
+
+.image-uploader:focus,
+.image-uploader:focus-within {
+  border-color: #7c4dff;
+  box-shadow: 0 0 0 3px rgba(124, 77, 255, 0.12);
+}
+
+.image-preview-shell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.image-preview {
+  width: min(220px, 100%);
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  object-fit: cover;
+  background: #ffffff;
+}
+
+.image-helper-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.image-helper-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #64748b;
+}
+
+.image-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .form-grid input,
@@ -903,14 +1165,20 @@ function formatDateTime(value: string) {
 }
 
 @media (max-width: 1080px) {
-  .stats-grid,
-  .panel-grid,
-  .form-grid {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .panel-grid {
     grid-template-columns: 1fr;
   }
 
-  .form-grid label.wide {
-    grid-column: span 1;
+  .form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-grid > .wide {
+    grid-column: span 2;
   }
 
   .filter-bar {
@@ -920,6 +1188,47 @@ function formatDateTime(value: string) {
 
   .search-box {
     width: 100%;
+  }
+}
+
+@media (max-width: 720px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .form-grid > .wide {
+    grid-column: span 2;
+  }
+
+  .create-actions.multi,
+  .action-row,
+  .image-actions {
+    flex-direction: column;
+  }
+
+  .create-actions .primary-btn,
+  .create-actions .ghost-btn,
+  .create-actions .danger-btn,
+  .action-row .ghost-btn,
+  .action-row .danger-btn,
+  .image-actions .ghost-btn,
+  .image-actions .danger-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-grid > .wide {
+    grid-column: span 2;
   }
 }
 </style>

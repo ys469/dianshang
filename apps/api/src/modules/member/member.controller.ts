@@ -74,6 +74,17 @@ export class MemberController {
     return ok(this.runtimeDataService.getOrdersForMember(user?.sub ?? null, user?.mobile ?? null));
   }
 
+  @Get('coupons')
+  getCoupons(
+    @CurrentUser()
+    user?: {
+      sub?: string;
+      mobile?: string | null;
+    }
+  ) {
+    return ok(this.runtimeDataService.getCouponsForMember(user?.sub ?? null, user?.mobile ?? null));
+  }
+
   @Post('check-in')
   claimDailyCheckIn(
     @CurrentUser()

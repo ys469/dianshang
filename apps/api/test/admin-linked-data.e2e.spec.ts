@@ -205,7 +205,14 @@ describe('/admin linked data', () => {
         consignee: '张三',
         mobile: '13800138000',
         address: '上海市浦东新区张江路 88 号 6 栋 1201',
-        items: [{ productId: 'p-001', quantity: 2 }]
+        items: [
+          {
+            productId: 'p-001',
+            quantity: 2,
+            pricingSourceType: 'catalog',
+            expectedUnitPrice: 49.9
+          }
+        ]
       });
 
     expect(createOrder.status).toBe(201);
@@ -259,7 +266,14 @@ describe('/admin linked data', () => {
       .set('Authorization', `Bearer ${memberToken}`)
       .send({
         fulfillmentMode: 'delivery',
-        items: [{ productId: 'p-001', quantity: 1 }]
+        items: [
+          {
+            productId: 'p-001',
+            quantity: 1,
+            pricingSourceType: 'catalog',
+            expectedUnitPrice: 49.9
+          }
+        ]
       });
 
     expect(createOrder.status).toBe(201);

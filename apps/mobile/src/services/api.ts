@@ -24,6 +24,8 @@ export interface HomePayload {
       memberPrice: number;
       image: string;
       tags: string[];
+      pricingSourceType?: 'catalog' | 'flash_sale' | 'group_buying';
+      pricingContextId?: string | null;
     }>;
   }>;
 }
@@ -70,6 +72,9 @@ export interface OrderPayload {
   cancelDeadlineAt: string;
   cancelledAt: string | null;
   canCancel: boolean;
+  couponId?: string | null;
+  couponTitle?: string | null;
+  couponDiscount?: number;
   itemCount: number;
   itemSummary: string;
   items: Array<{
@@ -78,6 +83,8 @@ export interface OrderPayload {
     quantity: number;
     price: number;
     memberPrice: number;
+    pricingSourceType?: string;
+    pricingContextId?: string | null;
   }>;
 }
 
@@ -98,6 +105,16 @@ export interface MemberProfile {
   defaultAddress: string;
   lastCheckInAt: string | null;
   checkinStreak: number;
+}
+
+export interface MemberCouponPayload {
+  id: string;
+  title: string;
+  threshold: number;
+  discount: number;
+  status: string;
+  enabled: boolean;
+  remainingCount: number;
 }
 
 export interface RechargePayload {
@@ -327,7 +344,14 @@ export const ordersClient = {
     consignee: string;
     mobile: string;
     address: string;
-    items: Array<{ productId: string; quantity: number }>;
+    couponId?: string;
+    items: Array<{
+      productId: string;
+      quantity: number;
+      pricingSourceType?: string;
+      pricingContextId?: string | null;
+      expectedUnitPrice?: number;
+    }>;
   }) {
     return fetchJson<OrderPayload>('/orders', {
       method: 'POST',
@@ -368,6 +392,12 @@ export const memberClient = {
 
   async getOrders() {
     return fetchJson<OrderPayload[]>('/member/orders', {
+      method: 'GET'
+    });
+  },
+
+  async getCoupons() {
+    return fetchJson<MemberCouponPayload[]>('/member/coupons', {
       method: 'GET'
     });
   },

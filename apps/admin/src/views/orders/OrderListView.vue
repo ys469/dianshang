@@ -587,7 +587,10 @@ function formatDateTime(value: string | null) {
 }
 
 @media (max-width: 1080px) {
-  .stats-grid,
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .order-body {
     grid-template-columns: 1fr;
   }

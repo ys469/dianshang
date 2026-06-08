@@ -18,8 +18,15 @@ import { RuntimeDataService } from '../runtime-data/runtime-data.service';
 interface CreateOrderBody {
   fulfillmentMode: 'delivery' | 'pickup';
   paymentMethod?: 'balance' | 'wechat';
-  items?: Array<{ productId: string; quantity: number }>;
+  items?: Array<{
+    productId: string;
+    quantity: number;
+    pricingSourceType?: string;
+    pricingContextId?: string;
+    expectedUnitPrice?: number;
+  }>;
   productIds?: string[];
+  couponId?: string;
   consignee?: string;
   mobile?: string;
   address?: string;
@@ -58,7 +65,10 @@ export class OrdersController {
     const items =
       body.items?.map((item) => ({
         productId: item.productId,
-        quantity: item.quantity
+        quantity: item.quantity,
+        pricingSourceType: item.pricingSourceType,
+        pricingContextId: item.pricingContextId,
+        expectedUnitPrice: item.expectedUnitPrice
       })) ??
       body.productIds?.map((productId) => ({
         productId,
@@ -85,6 +95,7 @@ export class OrdersController {
     const newOrder = this.runtimeDataService.createOrder({
       fulfillmentMode: body.fulfillmentMode,
       paymentMethod: body.paymentMethod,
+      couponId: body.couponId,
       items,
       customerName,
       customerMobile,

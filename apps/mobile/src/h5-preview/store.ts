@@ -6,6 +6,7 @@ import {
   paymentsClient,
   type CheckInPayload,
   type HomePayload,
+  type MemberCouponPayload,
   type MemberProfile,
   type OrderPayload,
   type WechatRechargeSessionPayload
@@ -22,10 +23,18 @@ export interface CatalogProduct extends DemoProduct {
   categoryId?: string | null;
   sectionId?: string;
   sectionTitle?: string;
+  sectionType?: string;
 }
 
-export interface CartItem extends CatalogProduct {
+export interface PurchaseItem extends CatalogProduct {
   quantity: number;
+  pricingSourceType?: string;
+  lineId?: string;
+}
+
+export interface CartItem extends PurchaseItem {
+  pricingSourceType: string;
+  lineId: string;
 }
 
 export interface DemoOrder {
@@ -44,7 +53,14 @@ export interface DemoOrder {
   canCancel: boolean;
   cancelDeadlineAt: string;
   cancelledAt: string | null;
-  items: CartItem[];
+  items: PurchaseItem[];
+}
+
+export interface OrderSuccessNotice {
+  orderNo: string;
+  total: number;
+  itemCount: number;
+  createdAt: string;
 }
 
 export interface SupportMessage {
@@ -59,6 +75,7 @@ export type ActivePanel =
   | 'orders'
   | 'address'
   | 'wallet'
+  | 'coupons'
   | 'points'
   | 'support'
   | null;
@@ -67,6 +84,7 @@ export type ProfileAction =
   | 'orders'
   | 'address'
   | 'recharge'
+  | 'coupons'
   | 'points'
   | 'checkin'
   | 'support';
@@ -165,7 +183,44 @@ function calculateTotal(items: Array<{ memberPrice: number; quantity: number }>)
   );
 }
 
-function createFallbackOrder(items: CartItem[]): DemoOrder {
+function resolvePricingSourceType(item: Pick<PurchaseItem, 'pricingSourceType' | 'sectionType'>) {
+  return item.pricingSourceType || item.sectionType || 'catalog';
+}
+
+function createCartLineId(productId: string, pricingSourceType: string) {
+  return `${productId}::${pricingSourceType}`;
+}
+
+function normalizePurchaseItem<T extends PurchaseItem>(
+  item: T
+): T & { pricingSourceType: string; lineId: string } {
+  const pricingSourceType = resolvePricingSourceType(item);
+
+  return {
+    ...item,
+    pricingSourceType,
+    lineId: item.lineId || createCartLineId(item.id, pricingSourceType)
+  };
+}
+
+function resolveCouponDiscount(
+  coupons: MemberCouponPayload[],
+  couponId: string | null | undefined,
+  orderAmount: number
+) {
+  if (!couponId) {
+    return 0;
+  }
+
+  const coupon = coupons.find((item) => item.id === couponId);
+  if (!coupon || !coupon.enabled || coupon.remainingCount <= 0 || orderAmount < coupon.threshold) {
+    return 0;
+  }
+
+  return Number(Math.min(coupon.discount, orderAmount).toFixed(2));
+}
+
+function createFallbackOrder(items: PurchaseItem[]): DemoOrder {
   const timestamp = Date.now();
   const createdAt = new Date(timestamp).toISOString();
 
@@ -201,7 +256,7 @@ function removeStorageItem(key: string) {
   removeClientStorageItem(key);
 }
 
-function mapApiOrderToDemoOrder(order: OrderPayload, items: CartItem[] = []): DemoOrder {
+function mapApiOrderToDemoOrder(order: OrderPayload, items: PurchaseItem[] = []): DemoOrder {
   return {
     id: order.orderNo,
     orderNo: order.orderNo,
@@ -227,8 +282,10 @@ function createEmptyMemberState() {
     walletBalance: INITIAL_WALLET_BALANCE,
     points: INITIAL_POINTS,
     coupons: INITIAL_COUPONS,
+    memberCoupons: [] as MemberCouponPayload[],
     orders: [] as DemoOrder[],
-    dailyCheckInClaimed: false
+    dailyCheckInClaimed: false,
+    orderSuccessNotice: null as OrderSuccessNotice | null
   };
 }
 
@@ -269,11 +326,13 @@ export const useDemoMallStore = defineStore('demo-mall', {
     walletBalance: INITIAL_WALLET_BALANCE,
     points: INITIAL_POINTS,
     coupons: INITIAL_COUPONS,
+    memberCoupons: [] as MemberCouponPayload[],
     dailyCheckInClaimed: false,
     activePanel: null as ActivePanel,
     activeAdminShortcut: null as AdminShortcutKey | null,
     selectedProduct: null as CatalogProduct | null,
     feedbackMessage: '',
+    orderSuccessNotice: null as OrderSuccessNotice | null,
     unreadMessages: 2,
     defaultConsignee: '',
     contactMobile: '',
@@ -305,8 +364,10 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.walletBalance = emptyState.walletBalance;
       this.points = emptyState.points;
       this.coupons = emptyState.coupons;
+      this.memberCoupons = emptyState.memberCoupons;
       this.orders = emptyState.orders;
       this.dailyCheckInClaimed = emptyState.dailyCheckInClaimed;
+      this.orderSuccessNotice = emptyState.orderSuccessNotice;
       this.defaultAddress = '';
       this.cart = [];
       this.activePanel = null;
@@ -315,12 +376,14 @@ export const useDemoMallStore = defineStore('demo-mall', {
     },
 
     async syncMemberData() {
-      const [profile, orders] = await Promise.all([
+      const [profile, orders, memberCoupons] = await Promise.all([
         memberClient.getProfile(),
-        memberClient.getOrders().catch(() => [])
+        memberClient.getOrders().catch(() => []),
+        memberClient.getCoupons().catch(() => [])
       ]);
 
       this.applyMemberProfile(profile);
+      this.memberCoupons = memberCoupons;
       this.orders = orders.map((order) => mapApiOrderToDemoOrder(order));
     },
 
@@ -604,21 +667,26 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.feedbackMessage = '';
     },
 
+    clearOrderSuccessNotice() {
+      this.orderSuccessNotice = null;
+    },
+
     addToCart(product: CatalogProduct) {
-      const existing = this.cart.find((item) => item.id === product.id);
+      const normalizedProduct = normalizePurchaseItem({ ...product, quantity: 1 });
+      const existing = this.cart.find((item) => item.lineId === normalizedProduct.lineId);
 
       if (existing) {
         existing.quantity += 1;
       } else {
-        this.cart.push({ ...product, quantity: 1 });
+        this.cart.push(normalizedProduct);
       }
 
       this.feedbackMessage = `${product.name} 已加入购物车`;
       return createResult(true, this.feedbackMessage);
     },
 
-    updateCartQuantity(productId: string, delta: number) {
-      const target = this.cart.find((item) => item.id === productId);
+    updateCartQuantity(lineId: string, delta: number) {
+      const target = this.cart.find((item) => item.lineId === lineId);
       if (!target) {
         return createResult(false, '购物车中未找到该商品');
       }
@@ -626,7 +694,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
       target.quantity += delta;
 
       if (target.quantity <= 0) {
-        this.cart = this.cart.filter((item) => item.id !== productId);
+        this.cart = this.cart.filter((item) => item.lineId !== lineId);
         this.feedbackMessage = `${target.name} 已从购物车移除`;
         return createResult(true, this.feedbackMessage);
       }
@@ -653,10 +721,14 @@ export const useDemoMallStore = defineStore('demo-mall', {
     },
 
     async submitOrder(
-      items: CartItem[],
-      paymentMethod: 'balance' | 'wechat' = 'balance'
+      items: PurchaseItem[],
+      paymentMethod: 'balance' | 'wechat' = 'balance',
+      couponId?: string | null
     ) {
-      const total = calculateTotal(items);
+      const normalizedItems = items.map((item) => normalizePurchaseItem(item));
+      const total = calculateTotal(normalizedItems);
+      const couponDiscount = resolveCouponDiscount(this.memberCoupons, couponId, total);
+      const payableAmount = Number(Math.max(0, total - couponDiscount).toFixed(2));
       const consignee = this.defaultConsignee.trim() || this.currentUserName.trim();
       const contactMobile = this.contactMobile.trim() || this.currentUserMobile.trim();
       const defaultAddress = this.defaultAddress.trim();
@@ -666,7 +738,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
           '\u8bf7\u5148\u5b8c\u5584\u6536\u8d27\u4eba\u3001\u8054\u7cfb\u7535\u8bdd\u548c\u6536\u8d27\u5730\u5740';
         return createResult(false, this.feedbackMessage);
       }
-      if (paymentMethod === 'balance' && this.walletBalance < total) {
+      if (paymentMethod === 'balance' && this.walletBalance < payableAmount) {
         this.feedbackMessage = '\u4f59\u989d\u4e0d\u8db3\uff0c\u8bf7\u5148\u5145\u503c\u540e\u518d\u63d0\u4ea4\u8ba2\u5355';
         return createResult(false, this.feedbackMessage);
       }
@@ -678,32 +750,49 @@ export const useDemoMallStore = defineStore('demo-mall', {
           consignee,
           mobile: contactMobile,
           address: defaultAddress,
-          items: items.map((item) => ({
+          couponId: couponId ?? undefined,
+          items: normalizedItems.map((item) => ({
             productId: item.id,
-            quantity: item.quantity
+            quantity: item.quantity,
+            pricingSourceType: item.pricingSourceType,
+            pricingContextId: item.pricingContextId ?? null,
+            expectedUnitPrice: item.memberPrice
           }))
         });
 
-        const [profile, apiOrders] = await Promise.all([
+        const [profile, apiOrders, memberCoupons] = await Promise.all([
           memberClient.getProfile().catch(() => null),
-          memberClient.getOrders().catch(() => null)
+          memberClient.getOrders().catch(() => null),
+          memberClient.getCoupons().catch(() => null)
         ]);
 
         if (profile) {
           this.applyMemberProfile(profile);
         } else if (paymentMethod === 'balance') {
-          this.walletBalance = Number((this.walletBalance - total).toFixed(2));
-          this.points += Math.floor(total / 10);
+          this.walletBalance = Number((this.walletBalance - payableAmount).toFixed(2));
+          this.points += Math.floor(payableAmount / 10);
         }
 
         if (apiOrders) {
           this.orders = apiOrders.map((entry) => mapApiOrderToDemoOrder(entry));
         } else {
-          this.orders.unshift(mapApiOrderToDemoOrder(order, items));
+          this.orders.unshift(mapApiOrderToDemoOrder(order, normalizedItems));
         }
+
+        if (memberCoupons) {
+          this.memberCoupons = memberCoupons;
+        }
+
+        const createdOrder = apiOrders?.find((entry) => entry.orderNo === order.orderNo) ?? order;
 
         this.activePanel = 'orders';
         this.selectedProduct = null;
+        this.orderSuccessNotice = {
+          orderNo: createdOrder.orderNo,
+          total: createdOrder.payableAmount,
+          itemCount: createdOrder.itemCount,
+          createdAt: createdOrder.createdAt
+        };
         this.feedbackMessage =
           '\u4e0b\u5355\u6210\u529f\uff0c\u8ba2\u5355 ' + order.orderNo + ' \u5df2\u521b\u5efa';
         return createResult(true, this.feedbackMessage);
@@ -717,9 +806,10 @@ export const useDemoMallStore = defineStore('demo-mall', {
     async cancelOrder(orderNo: string) {
       try {
         const order = await ordersClient.cancel(orderNo);
-        const [profile, apiOrders] = await Promise.all([
+        const [profile, apiOrders, memberCoupons] = await Promise.all([
           memberClient.getProfile().catch(() => null),
-          memberClient.getOrders().catch(() => null)
+          memberClient.getOrders().catch(() => null),
+          memberClient.getCoupons().catch(() => null)
         ]);
 
         if (profile) {
@@ -738,6 +828,10 @@ export const useDemoMallStore = defineStore('demo-mall', {
           } else {
             this.orders.unshift(mappedOrder);
           }
+        }
+
+        if (memberCoupons) {
+          this.memberCoupons = memberCoupons;
         }
 
         this.feedbackMessage = '\u8ba2\u5355\u5df2\u64a4\u56de';
@@ -905,6 +999,10 @@ export const useDemoMallStore = defineStore('demo-mall', {
         case 'recharge':
           this.activePanel = 'wallet';
           this.feedbackMessage = '已打开充值中心';
+          return createResult(true, this.feedbackMessage);
+        case 'coupons':
+          this.activePanel = 'coupons';
+          this.feedbackMessage = '已打开优惠券';
           return createResult(true, this.feedbackMessage);
         case 'points':
           this.activePanel = 'points';

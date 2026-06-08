@@ -151,7 +151,7 @@ describe('/admin operational workflows', () => {
         consignee: '王小满',
         mobile: '13955556666',
         address: '上海市浦东新区祖冲之路 288 号 5 栋 601',
-        items: [{ productId: 'p-001', quantity: 1 }]
+        items: [{ productId: 'p-001', quantity: 1, pricingSourceType: 'catalog', expectedUnitPrice: 49.9 }]
       });
 
     expect(createOrder.status).toBe(201);

@@ -36,9 +36,26 @@ const {
     orders: []
   };
 
-  const priceMap: Record<string, number> = {
-    'p-001': 49.9,
+  const priceMap: Record<string, number | Record<string, number>> = {
+    'p-001': {
+      catalog: 49.9,
+      flash_sale: 29.9,
+      group_buying: 39.9
+    },
     'p-002': 109
+  };
+
+  const resolvePrice = (productId: string, pricingSourceType?: string) => {
+    const entry = priceMap[productId];
+    if (typeof entry === 'number') {
+      return entry;
+    }
+
+    if (!entry) {
+      return 0;
+    }
+
+    return entry[pricingSourceType ?? 'catalog'] ?? entry.catalog ?? 0;
   };
 
   return {
@@ -122,11 +139,17 @@ const {
         consignee: string;
         mobile: string;
         address: string;
-        items: Array<{ productId: string; quantity: number }>;
+        items: Array<{
+          productId: string;
+          quantity: number;
+          pricingSourceType?: string;
+          pricingContextId?: string | null;
+          expectedUnitPrice?: number;
+        }>;
       }) => {
         const total = Number(
           items.reduce(
-            (sum, item) => sum + (priceMap[item.productId] ?? 0) * item.quantity,
+            (sum, item) => sum + resolvePrice(item.productId, item.pricingSourceType) * item.quantity,
             0
           ).toFixed(2)
         );
@@ -168,8 +191,9 @@ const {
             productId: item.productId,
             productName: item.productId,
             quantity: item.quantity,
-            price: priceMap[item.productId] ?? 0,
-            memberPrice: priceMap[item.productId] ?? 0
+            price: resolvePrice(item.productId, item.pricingSourceType),
+            memberPrice: resolvePrice(item.productId, item.pricingSourceType),
+            pricingContextId: item.pricingContextId ?? null
           }))
         };
 
@@ -307,6 +331,29 @@ describe('demo mall store', () => {
     expect(store.cart[0].quantity).toBe(2);
   });
 
+  it('keeps activity-priced and regular-priced entries separate for the same product', () => {
+    const store = useDemoMallStore();
+
+    store.addToCart({
+      ...sampleProduct,
+      memberPrice: 29.9,
+      pricingContextId: 'fs-001',
+      sectionId: 'flash-1',
+      sectionTitle: '限时秒杀',
+      sectionType: 'flash_sale'
+    });
+    store.addToCart({
+      ...sampleProduct,
+      memberPrice: 49.9,
+      sectionId: 'member-1',
+      sectionTitle: '会员专区',
+      sectionType: 'member_exclusive'
+    });
+
+    expect(store.cart).toHaveLength(2);
+    expect(store.cartTotal).toBe(79.8);
+  });
+
   it('creates an order, clears the cart, and updates member assets on checkout', async () => {
     const store = useDemoMallStore();
 
@@ -337,6 +384,57 @@ describe('demo mall store', () => {
     expect(store.orders).toHaveLength(1);
     expect(store.walletBalance).toBeCloseTo(361.1, 5);
     expect(store.points).toBe(595);
+  });
+
+  it('submits the activity pricing source and keeps a visible order success notice', async () => {
+    const store = useDemoMallStore();
+
+    await store.login({
+      role: 'user',
+      account: '13800138000',
+      password: 'member123'
+    });
+    await store.updateDeliveryProfile({
+      defaultConsignee: 'Luna Zhang',
+      contactMobile: '13911112222',
+      defaultAddress: 'Shanghai Pudong Jinke Rd 1888 Building 2 Room 803'
+    });
+
+    const result = await store.submitOrder(
+      [
+        {
+          ...sampleProduct,
+          memberPrice: 29.9,
+          pricingContextId: 'fs-001',
+          sectionId: 'flash-1',
+          sectionTitle: '限时秒杀',
+          sectionType: 'flash_sale',
+          quantity: 1
+        }
+      ],
+      'balance'
+    );
+
+    expect(result.success).toBe(true);
+    expect(createOrderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            productId: 'p-001',
+            pricingSourceType: 'flash_sale',
+            pricingContextId: 'fs-001',
+            expectedUnitPrice: 29.9
+          })
+        ]
+      })
+    );
+    expect(store.orders[0].total).toBe(29.9);
+    expect((store as any).orderSuccessNotice).toEqual(
+      expect.objectContaining({
+        orderNo: 'SM900',
+        total: 29.9
+      })
+    );
   });
 
   it('blocks checkout until the member has confirmed a valid delivery address', async () => {

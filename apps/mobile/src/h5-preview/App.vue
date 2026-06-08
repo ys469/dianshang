@@ -24,6 +24,7 @@ const profileMenus: Array<{ label: string; action: ProfileAction }> = [
   { label: '我的订单', action: 'orders' },
   { label: '收货地址', action: 'address' },
   { label: '充值中心', action: 'recharge' },
+  { label: '优惠券', action: 'coupons' },
   { label: '积分商城', action: 'points' },
   { label: '签到奖励', action: 'checkin' },
   { label: '联系客服', action: 'support' }
@@ -76,21 +77,23 @@ let resetTimer: ReturnType<typeof setInterval> | null = null;
 let loginTimer: ReturnType<typeof setInterval> | null = null;
 
 const { banners, categories, notice, sections } = storeToRefs(homeStore);
-const {
-  activePanel,
-  cart,
-  cartCount,
-  cartTotal,
-  contactMobile,
-  coupons,
-  currentUserName,
-  currentUserMobile,
-  defaultConsignee,
-  defaultAddress,
-  feedbackMessage,
-  isAuthenticated,
-  orders,
-  points,
+  const {
+    activePanel,
+    cart,
+    cartCount,
+    cartTotal,
+    contactMobile,
+    coupons,
+    currentUserName,
+    currentUserMobile,
+    defaultConsignee,
+    defaultAddress,
+    feedbackMessage,
+    isAuthenticated,
+    memberCoupons,
+    orderSuccessNotice,
+    orders,
+    points,
   searchDraft,
   searchQuery,
   selectedCategoryId,
@@ -117,8 +120,9 @@ let orderClock: ReturnType<typeof setInterval> | null = null;
 const confirmDialog = reactive({
   open: false,
   source: 'buy_now' as 'buy_now' | 'cart',
-  items: [] as Array<CatalogProduct & { quantity: number }>,
-  paymentMethod: 'balance' as 'balance' | 'wechat'
+  items: [] as Array<CatalogProduct & { quantity: number; lineId?: string; pricingSourceType?: string }>,
+  paymentMethod: 'balance' as 'balance' | 'wechat',
+  couponId: '' as string
 });
 
 const confirmItemCount = computed(() =>
@@ -127,6 +131,22 @@ const confirmItemCount = computed(() =>
 
 const confirmTotal = computed(() =>
   confirmDialog.items.reduce((sum, item) => sum + item.memberPrice * item.quantity, 0)
+);
+
+const matchedCoupons = computed(() =>
+  memberCoupons.value.filter(
+    (coupon) => coupon.enabled && coupon.remainingCount > 0 && confirmTotal.value >= coupon.threshold
+  )
+);
+
+const selectedCoupon = computed(
+  () => matchedCoupons.value.find((coupon) => coupon.id === confirmDialog.couponId) ?? null
+);
+
+const confirmDiscount = computed(() => selectedCoupon.value?.discount ?? 0);
+
+const confirmPayable = computed(() =>
+  Math.max(0, Number((confirmTotal.value - confirmDiscount.value).toFixed(2)))
 );
 
 const confirmedAddressSummary = computed(() => ({
@@ -219,12 +239,13 @@ function resolveCategoryId(sectionTitle: string, product: CatalogProduct) {
 
 const catalogProducts = computed<CatalogProduct[]>(() =>
   sections.value.flatMap((section) =>
-    section.products.map((product) => ({
-      ...product,
-      categoryId: resolveCategoryId(section.title, product),
-      sectionId: section.id,
-      sectionTitle: section.title
-    }))
+      section.products.map((product) => ({
+        ...product,
+        categoryId: resolveCategoryId(section.title, product),
+        sectionId: section.id,
+        sectionTitle: section.title,
+        sectionType: section.type
+      }))
   )
 );
 
@@ -278,6 +299,8 @@ const panelTitle = computed(() => {
       return '收货地址';
     case 'wallet':
       return '充值中心';
+    case 'coupons':
+      return '优惠券';
     case 'points':
       return '积分商城';
     case 'support':
@@ -339,6 +362,7 @@ function openCheckoutConfirm(
   confirmDialog.source = source;
   confirmDialog.items = items.map((item) => ({ ...item }));
   confirmDialog.paymentMethod = 'balance';
+  confirmDialog.couponId = '';
   confirmDialog.open = true;
 }
 
@@ -364,7 +388,11 @@ function handleEditAddressFromConfirm() {
 }
 
 async function handleConfirmCheckout() {
-  const result = await mallStore.submitOrder(confirmDialog.items, confirmDialog.paymentMethod);
+  const result = await mallStore.submitOrder(
+    confirmDialog.items,
+    confirmDialog.paymentMethod,
+    confirmDialog.couponId || undefined
+  );
   if (result.success) {
     if (confirmDialog.source === 'cart') {
       mallStore.cart = [];
@@ -884,7 +912,7 @@ function handleLogout() {
       </section>
     </div>
 
-    <div v-else class="page-frame">
+    <div v-else :class="['page-frame', { 'dialog-open': confirmDialog.open }]">
       <header class="topbar">
         <div>
           <p class="eyebrow">智能会员商城系统</p>
@@ -1033,15 +1061,15 @@ function handleLogout() {
             </div>
 
             <div v-if="cart.length" class="cart-list">
-              <article v-for="item in cart" :key="item.id" class="cart-item">
+              <article v-for="item in cart" :key="item.lineId" class="cart-item">
                 <img :src="item.image" :alt="item.name" class="cart-image" />
                 <div class="cart-body">
                   <h3>{{ item.name }}</h3>
                   <p class="muted-text">会员价 ¥{{ item.memberPrice }} / 件</p>
                   <div class="quantity-row">
-                    <button type="button" class="step-button" @click="mallStore.updateCartQuantity(item.id, -1)">-</button>
+                    <button type="button" class="step-button" @click="mallStore.updateCartQuantity(item.lineId, -1)">-</button>
                     <span>{{ item.quantity }}</span>
-                    <button type="button" class="step-button" @click="mallStore.updateCartQuantity(item.id, 1)">+</button>
+                    <button type="button" class="step-button" @click="mallStore.updateCartQuantity(item.lineId, 1)">+</button>
                   </div>
                 </div>
                 <strong>¥{{ (item.memberPrice * item.quantity).toFixed(2) }}</strong>
@@ -1134,6 +1162,17 @@ function handleLogout() {
           </div>
 
           <div v-else-if="activePanel === 'orders'" class="panel-content">
+            <article v-if="orderSuccessNotice" class="info-card success-card">
+              <div class="section-head compact">
+                <strong>下单成功</strong>
+                <button type="button" class="ghost-button compact-button" @click="mallStore.clearOrderSuccessNotice()">
+                  关闭
+                </button>
+              </div>
+              <p>订单号：{{ orderSuccessNotice.orderNo }}</p>
+              <p>实付金额：¥{{ orderSuccessNotice.total.toFixed(2) }}</p>
+              <p>商品件数：{{ orderSuccessNotice.itemCount }} 件</p>
+            </article>
             <div v-if="orders.length" class="order-list">
               <article v-for="order in orders" :key="order.id" class="order-card">
                 <div class="section-head compact">
@@ -1143,6 +1182,9 @@ function handleLogout() {
                 <p class="muted-text">{{ order.createdAt }}</p>
                 <p class="muted-text">共 {{ order.itemCount }} 件商品</p>
                 <p class="muted-text">收货地址：{{ order.address || '请先完善收货地址' }}</p>
+                <p v-if="order.couponTitle" class="muted-text">
+                  已使用优惠券：{{ order.couponTitle }} -¥{{ (order.couponDiscount ?? 0).toFixed(2) }}
+                </p>
                 <p class="summary-total small">¥{{ order.total.toFixed(2) }}</p>
                 <div class="order-actions">
                   <span v-if="canCancelOrder(order)" class="countdown-chip">
@@ -1225,6 +1267,24 @@ function handleLogout() {
             </button>
           </div>
 
+          <div v-else-if="activePanel === 'coupons'" class="panel-content">
+            <article class="info-card">
+              <strong>当前可用优惠券</strong>
+              <p class="summary-total small">{{ coupons }}</p>
+            </article>
+            <div v-if="memberCoupons.length" class="coupon-list stacked">
+              <article v-for="coupon in memberCoupons" :key="coupon.id" class="info-card compact-card">
+                <strong>{{ coupon.title }}</strong>
+                <p>满 ¥{{ coupon.threshold }} 减 ¥{{ coupon.discount }}</p>
+                <p class="muted-text">剩余可用次数：{{ coupon.remainingCount }}</p>
+              </article>
+            </div>
+            <div v-else class="empty-state compact">
+              <h2>还没有可用优惠券</h2>
+              <p>签到奖励或后台发券后，这里会显示不同面额的优惠券。</p>
+            </div>
+          </div>
+
           <div v-else-if="activePanel === 'points'" class="panel-content">
             <article class="info-card">
               <strong>当前积分</strong>
@@ -1276,21 +1336,31 @@ function handleLogout() {
         </section>
       </aside>
 
-      <aside v-if="confirmDialog.open" class="panel-overlay" @click.self="confirmDialog.open = false">
+      <aside
+        v-if="confirmDialog.open"
+        class="panel-overlay confirm-overlay"
+        @click.self="confirmDialog.open = false"
+      >
         <section class="detail-panel confirm-panel">
           <div class="panel-header">
             <h2>确认下单</h2>
             <button type="button" class="close-button" @click="confirmDialog.open = false">关闭</button>
           </div>
 
-          <div class="panel-content">
+          <div class="panel-content confirm-panel-body">
             <article class="info-card">
               <strong>商品信息</strong>
-              <p>共 {{ confirmItemCount }} 件商品，合计 ¥{{ confirmTotal.toFixed(2) }}</p>
+              <p>共 {{ confirmItemCount }} 件商品，商品金额 ¥{{ confirmTotal.toFixed(2) }}</p>
+              <p v-if="selectedCoupon">优惠券抵扣 -¥{{ confirmDiscount.toFixed(2) }}</p>
+              <p>待支付 ¥{{ confirmPayable.toFixed(2) }}</p>
             </article>
 
             <div class="order-preview-list">
-              <article v-for="item in confirmDialog.items" :key="item.id" class="info-card compact-card">
+              <article
+                v-for="item in confirmDialog.items"
+                :key="item.lineId || `${item.id}-${item.sectionType || 'catalog'}`"
+                class="info-card compact-card"
+              >
                 <strong>{{ item.name }}</strong>
                 <p>{{ item.quantity }} 件，会员价 ¥{{ item.memberPrice }}</p>
               </article>
@@ -1302,15 +1372,45 @@ function handleLogout() {
               <p>{{ confirmedAddressSummary.address }}</p>
             </article>
 
-            <div class="panel-actions confirm-actions">
-              <button type="button" class="ghost-button" @click="handleEditAddressFromConfirm">
-                修改地址
-              </button>
-              <button type="button" class="member-button action-button" @click="handleConfirmCheckout">
-                确认提交订单
-              </button>
-            </div>
+            <article class="info-card">
+              <strong>选择优惠券</strong>
+              <div v-if="memberCoupons.length" class="coupon-list">
+                <button
+                  type="button"
+                  class="coupon-option"
+                  :class="{ active: !confirmDialog.couponId }"
+                  @click="confirmDialog.couponId = ''"
+                >
+                  不使用优惠券
+                </button>
+                <button
+                  v-for="coupon in memberCoupons"
+                  :key="coupon.id"
+                  type="button"
+                  class="coupon-option"
+                  :class="{
+                    active: confirmDialog.couponId === coupon.id,
+                    disabled: !coupon.enabled || coupon.remainingCount <= 0 || confirmTotal < coupon.threshold
+                  }"
+                  :disabled="!coupon.enabled || coupon.remainingCount <= 0 || confirmTotal < coupon.threshold"
+                  @click="confirmDialog.couponId = coupon.id"
+                >
+                  <strong>{{ coupon.title }}</strong>
+                  <span>满 ¥{{ coupon.threshold }} 减 ¥{{ coupon.discount }}</span>
+                </button>
+              </div>
+              <p v-else class="muted-text">当前没有可用优惠券。</p>
+            </article>
           </div>
+
+          <footer class="panel-actions confirm-footer">
+            <button type="button" class="ghost-button" @click="handleEditAddressFromConfirm">
+              修改地址
+            </button>
+            <button type="button" class="member-button action-button" @click="handleConfirmCheckout">
+              确认提交订单
+            </button>
+          </footer>
         </section>
       </aside>
 
@@ -1318,7 +1418,7 @@ function handleLogout() {
         <div v-if="feedbackMessage && isAuthenticated" class="toast">{{ feedbackMessage }}</div>
       </transition>
 
-      <nav class="tabbar">
+      <nav v-show="!confirmDialog.open" class="tabbar">
         <button
           v-for="tab in tabs"
           :key="tab.key"
@@ -2037,16 +2137,40 @@ p {
 .panel-overlay {
   position: fixed;
   inset: 0;
+  z-index: 30;
   display: grid;
   align-items: end;
   background: rgba(15, 23, 42, 0.38);
   padding: 18px 12px 96px;
 }
 
+.confirm-overlay {
+  align-items: center;
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+
 .detail-panel {
   width: min(100%, 456px);
   margin: 0 auto;
   padding: 18px;
+}
+
+.confirm-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: min(calc(100vh - 48px), 860px);
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+}
+
+.confirm-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  padding-bottom: 4px;
 }
 
 .panel-product-image {
@@ -2069,6 +2193,15 @@ p {
 .confirm-actions {
   display: grid;
   gap: 10px;
+}
+
+.confirm-footer {
+  display: grid;
+  flex-shrink: 0;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #edf2ff;
+  background: rgba(255, 255, 255, 0.98);
 }
 
 .countdown-chip {
@@ -2113,6 +2246,11 @@ p {
   box-shadow: 0 20px 40px rgba(17, 24, 39, 0.18);
 }
 
+.dialog-open .tabbar {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .tab-button {
   position: relative;
   min-height: 44px;
@@ -2142,6 +2280,45 @@ p {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.compact-button {
+  padding: 6px 10px;
+  border-radius: 10px;
+}
+
+.success-card {
+  border: 1px solid rgba(124, 77, 255, 0.16);
+  background: linear-gradient(135deg, rgba(124, 77, 255, 0.08), rgba(255, 213, 79, 0.16));
+}
+
+.coupon-list {
+  display: grid;
+  gap: 10px;
+}
+
+.coupon-list.stacked {
+  grid-template-columns: 1fr;
+}
+
+.coupon-option {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #ffffff;
+  color: #334155;
+  text-align: left;
+}
+
+.coupon-option.active {
+  border-color: rgba(124, 77, 255, 0.45);
+  background: rgba(124, 77, 255, 0.08);
+}
+
+.coupon-option.disabled {
+  opacity: 0.55;
 }
 
 @media (max-width: 540px) {
