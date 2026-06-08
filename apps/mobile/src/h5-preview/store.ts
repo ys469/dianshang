@@ -155,7 +155,16 @@ function isValidMobile(value: string) {
   return /^1[3-9]\d{9}$/.test(value);
 }
 
-export function filterProducts<T extends { name: string; tags: string[]; categoryId?: string | null }>(
+export function filterProducts<
+  T extends {
+    name: string;
+    tags: string[];
+    categoryId?: string | null;
+    subtitle?: string;
+    description?: string;
+    categoryName?: string;
+  }
+>(
   products: T[],
   query: string,
   categoryId: string | null = null
@@ -172,7 +181,16 @@ export function filterProducts<T extends { name: string; tags: string[]; categor
       return true;
     }
 
-    const haystack = normalizeSearchValue(`${product.name} ${product.tags.join(' ')}`);
+    const haystack = normalizeSearchValue(
+      [
+        product.name,
+        product.subtitle ?? '',
+        product.description ?? '',
+        product.categoryName ?? '',
+        product.categoryId ?? '',
+        product.tags.join(' ')
+      ].join(' ')
+    );
     return haystack.includes(normalizedQuery);
   });
 }
@@ -338,7 +356,8 @@ export const useDemoMallStore = defineStore('demo-mall', {
     contactMobile: '',
     defaultAddress: '',
     supportMessages: [createSupportGreeting()] as SupportMessage[],
-    supportReply: '在线客服通常会在 5 分钟内响应。'
+    supportReply: '在线客服通常会在 5 分钟内响应。',
+    orderSubmitting: false
   }),
   getters: {
     cartCount: (state) => state.cart.reduce((sum, item) => sum + item.quantity, 0),
@@ -725,6 +744,11 @@ export const useDemoMallStore = defineStore('demo-mall', {
       paymentMethod: 'balance' | 'wechat' = 'balance',
       couponId?: string | null
     ) {
+      if (this.orderSubmitting) {
+        this.feedbackMessage = '订单正在提交，请不要重复点击';
+        return createResult(false, this.feedbackMessage);
+      }
+
       const normalizedItems = items.map((item) => normalizePurchaseItem(item));
       const total = calculateTotal(normalizedItems);
       const couponDiscount = resolveCouponDiscount(this.memberCoupons, couponId, total);
@@ -742,6 +766,8 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.feedbackMessage = '\u4f59\u989d\u4e0d\u8db3\uff0c\u8bf7\u5148\u5145\u503c\u540e\u518d\u63d0\u4ea4\u8ba2\u5355';
         return createResult(false, this.feedbackMessage);
       }
+
+      this.orderSubmitting = true;
 
       try {
         const order = await ordersClient.create({
@@ -800,6 +826,8 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.feedbackMessage =
           error instanceof Error ? error.message : '\u4e0b\u5355\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5';
         return createResult(false, this.feedbackMessage);
+      } finally {
+        this.orderSubmitting = false;
       }
     },
 
@@ -851,7 +879,11 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
       try {
         const result = await memberClient.claimDailyCheckIn();
+        const memberCoupons = await memberClient.getCoupons().catch(() => null);
         this.applyMemberProfile(result.profile);
+        if (memberCoupons) {
+          this.memberCoupons = memberCoupons;
+        }
         this.dailyCheckInClaimed = true;
         this.feedbackMessage =
           result.rewardCoupons > 0

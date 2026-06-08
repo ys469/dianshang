@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { filterProducts, useDemoMallStore } from '../h5-preview/store';
 import type { HomePayload, MemberProfile, OrderPayload } from '../services/api';
 
-const {
+  const {
   cancelOrderMock,
   claimDailyCheckInMock,
   createOrderMock,
+  getCouponsMock,
   getOrdersMock,
   getProfileMock,
   loginMock,
@@ -115,6 +116,17 @@ const {
       };
     }),
     getProfileMock: vi.fn(async () => ({ ...state.profile })),
+    getCouponsMock: vi.fn(async () => [
+      {
+        id: 'c-001',
+        title: '满99减10',
+        threshold: 99,
+        discount: 10,
+        status: '进行中',
+        enabled: true,
+        remainingCount: state.profile.coupons
+      }
+    ]),
     getOrdersMock: vi.fn(async () => state.orders.map((order) => ({ ...order }))),
     updateProfileMock: vi.fn(
       async (payload: {
@@ -257,6 +269,7 @@ vi.mock('../services/api', async () => {
     memberClient: {
       ...actual.memberClient,
       claimDailyCheckIn: claimDailyCheckInMock,
+      getCoupons: getCouponsMock,
       getProfile: getProfileMock,
       getOrders: getOrdersMock,
       updateProfile: updateProfileMock
@@ -314,6 +327,7 @@ describe('demo mall store', () => {
     registerMock.mockClear();
     sendSmsCodeMock.mockClear();
     getProfileMock.mockClear();
+    getCouponsMock.mockClear();
     getOrdersMock.mockClear();
     updateProfileMock.mockClear();
     createOrderMock.mockClear();
@@ -471,15 +485,44 @@ describe('demo mall store', () => {
     expect(store.points).toBe(600);
   });
 
+  it('refreshes the coupon list after daily check-in rewards are granted', async () => {
+    const store = useDemoMallStore();
+
+    await store.login({
+      role: 'user',
+      account: '13800138000',
+      password: 'member123'
+    });
+
+    const result = await store.claimDailyCheckIn();
+
+    expect(result.success).toBe(true);
+    expect(getCouponsMock).toHaveBeenCalled();
+    expect(store.memberCoupons[0]).toEqual(
+      expect.objectContaining({
+        id: 'c-001',
+        remainingCount: 5
+      })
+    );
+  });
+
   it('filters products by the search keyword', () => {
     const results = filterProducts(
       [
-        sampleProduct,
+        {
+          ...sampleProduct,
+          subtitle: '限时果礼',
+          description: '甄选产地直发蜜桃礼盒',
+          categoryId: 'food'
+        },
         {
           ...sampleProduct,
           id: 'p-003',
           name: 'Daily Probiotic Pack',
-          tags: ['member-only']
+          subtitle: '肠胃轻负担',
+          description: '每日早餐冲泡',
+          tags: ['member-only'],
+          categoryId: 'health'
         }
       ],
       'probiotic'
@@ -487,6 +530,94 @@ describe('demo mall store', () => {
 
     expect(results).toHaveLength(1);
     expect(results[0].id).toBe('p-003');
+  });
+
+  it('filters products by subtitle, description, and category name context', () => {
+    const results = filterProducts(
+      [
+        {
+          ...sampleProduct,
+          id: 'p-010',
+          name: 'Fresh Peach Box',
+          subtitle: '门店爆款',
+          description: '适合家庭分享的当季鲜果',
+          tags: ['鲜果'],
+          categoryId: 'food',
+          categoryName: '食品生鲜'
+        },
+        {
+          ...sampleProduct,
+          id: 'p-011',
+          name: 'Protein Bar',
+          subtitle: '健身加餐',
+          description: '高蛋白便携零食',
+          tags: ['能量'],
+          categoryId: 'sports',
+          categoryName: '运动户外'
+        }
+      ] as Array<typeof sampleProduct & { subtitle: string; description: string; categoryName: string; categoryId: string }>,
+      '生鲜'
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('p-010');
+  });
+
+  it('prevents duplicate order submissions while one checkout request is still pending', async () => {
+    const store = useDemoMallStore();
+
+    await store.login({
+      role: 'user',
+      account: '13800138000',
+      password: 'member123'
+    });
+    await store.updateDeliveryProfile({
+      defaultConsignee: 'Luna Zhang',
+      contactMobile: '13911112222',
+      defaultAddress: 'Shanghai Pudong Jinke Rd 1888 Building 2 Room 803'
+    });
+
+    let releaseCreateOrder: (() => void) | null = null;
+    createOrderMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseCreateOrder = () =>
+            resolve({
+              id: 'o-dup',
+              orderNo: 'SMDUP',
+              status: '待发货',
+              paymentMethod: 'balance',
+              paymentState: 'success',
+              paymentChannel: 'balance',
+              transactionId: null,
+              paidAt: '2026-06-06T10:00:00.000Z',
+              fulfillmentMode: '快递到家',
+              payableAmount: 49.9,
+              totalAmount: 49.9,
+              customerName: 'Luna Zhang',
+              customerMobile: '13911112222',
+              address: 'Shanghai Pudong Jinke Rd 1888 Building 2 Room 803',
+              createdAt: '2026-06-06 10:00:00',
+              cancelDeadlineAt: '2026-06-06T10:03:00.000Z',
+              cancelledAt: null,
+              canCancel: true,
+              itemCount: 1,
+              itemSummary: 'p-001 x1',
+              items: []
+            });
+        })
+    );
+
+    const firstPromise = store.submitOrder([{ ...sampleProduct, quantity: 1 }], 'balance');
+    const secondResult = await store.submitOrder([{ ...sampleProduct, quantity: 1 }], 'balance');
+
+    expect(secondResult.success).toBe(false);
+    expect(secondResult.message).toContain('正在提交');
+    expect(createOrderMock).toHaveBeenCalledTimes(1);
+
+    releaseCreateOrder?.();
+    const firstResult = await firstPromise;
+    expect(firstResult.success).toBe(true);
   });
 
   it('tracks pending and submitted search keywords separately', () => {

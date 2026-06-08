@@ -12,6 +12,7 @@ const {
   createOrderMock,
   createRechargeSessionMock,
   claimCheckInMock,
+  getCouponsMock,
   getProfileMock,
   getRechargeStatusMock,
   loginMock,
@@ -127,8 +128,8 @@ const {
   ),
   claimCheckInMock: vi.fn(async () => ({
     rewardPoints: 20,
-    rewardCoupons: 0,
-    rewardLabel: '20 积分',
+    rewardCoupons: 1,
+    rewardLabel: '20 积分 + 优惠券',
     streak: 1,
     profile: {
       id: 'u-100',
@@ -138,7 +139,7 @@ const {
       balance: 80,
       points: 600,
       growthValue: 1200,
-      coupons: 4,
+      coupons: 5,
       totalOrders: 2,
       totalSpent: 218.9,
       lastOrderAt: '2026-06-05 09:30:00',
@@ -149,6 +150,17 @@ const {
       checkinStreak: 1
     } satisfies MemberProfile
   })),
+  getCouponsMock: vi.fn(async () => [
+    {
+      id: 'c-001',
+      title: '签到奖励券',
+      threshold: 59,
+      discount: 8,
+      status: '进行中',
+      enabled: true,
+      remainingCount: 5
+    }
+  ]),
   supportChatMock: vi.fn(async ({ message }: { message: string }) => ({
     reply: `AI客服已收到：${message}`,
     handoffSuggested: false
@@ -174,6 +186,7 @@ vi.mock('../services/api', async () => {
     memberClient: {
       ...actual.memberClient,
       claimDailyCheckIn: claimCheckInMock,
+      getCoupons: getCouponsMock,
       getProfile: getProfileMock,
       sendSupportMessage: supportChatMock,
       updateProfile: updateProfileMock
@@ -200,6 +213,7 @@ describe('demo mall API bridge', () => {
     createRechargeSessionMock.mockClear();
     getRechargeStatusMock.mockClear();
     claimCheckInMock.mockClear();
+    getCouponsMock.mockClear();
     supportChatMock.mockClear();
   });
 
@@ -345,6 +359,12 @@ describe('demo mall API bridge', () => {
     expect(claimCheckInMock).toHaveBeenCalled();
     expect(result.success).toBe(true);
     expect(store.points).toBe(600);
+    expect(store.memberCoupons[0]).toEqual(
+      expect.objectContaining({
+        title: '签到奖励券',
+        remainingCount: 5
+      })
+    );
     expect(store.dailyCheckInClaimed).toBe(true);
   });
 
