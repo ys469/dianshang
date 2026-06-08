@@ -53,7 +53,18 @@ export interface DemoOrder {
   canCancel: boolean;
   cancelDeadlineAt: string;
   cancelledAt: string | null;
-  items: PurchaseItem[];
+  couponTitle?: string | null;
+  couponDiscount?: number;
+  logisticsCompany?: string | null;
+  trackingNo?: string | null;
+  shippedAt?: string | null;
+  completedAt?: string | null;
+  items: Array<
+    PurchaseItem & {
+      productId?: string;
+      productName?: string;
+    }
+  >;
 }
 
 export interface OrderSuccessNotice {
@@ -275,6 +286,24 @@ function removeStorageItem(key: string) {
 }
 
 function mapApiOrderToDemoOrder(order: OrderPayload, items: PurchaseItem[] = []): DemoOrder {
+  const mappedItems =
+    order.items?.length
+      ? order.items.map((item) => ({
+          id: item.productId,
+          productId: item.productId,
+          productName: item.productName,
+          name: item.productName,
+          price: item.price,
+          memberPrice: item.memberPrice,
+          image: '',
+          tags: [],
+          quantity: item.quantity,
+          pricingSourceType: item.pricingSourceType,
+          pricingContextId: item.pricingContextId ?? null,
+          lineId: createCartLineId(item.productId, item.pricingSourceType || 'catalog')
+        }))
+      : items;
+
   return {
     id: order.orderNo,
     orderNo: order.orderNo,
@@ -291,7 +320,13 @@ function mapApiOrderToDemoOrder(order: OrderPayload, items: PurchaseItem[] = [])
     canCancel: order.canCancel,
     cancelDeadlineAt: order.cancelDeadlineAt,
     cancelledAt: order.cancelledAt,
-    items
+    couponTitle: order.couponTitle ?? null,
+    couponDiscount: order.couponDiscount ?? 0,
+    logisticsCompany: order.logisticsCompany ?? null,
+    trackingNo: order.trackingNo ?? null,
+    shippedAt: order.shippedAt ?? null,
+    completedAt: order.completedAt ?? null,
+    items: mappedItems
   };
 }
 

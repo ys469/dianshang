@@ -54,7 +54,7 @@ watch(
         </button>
       </div>
       <nav class="nav">
-        <RouterLink to="/quick" @click="closeMenu">快捷功能</RouterLink>
+        <RouterLink to="/quick" @click="closeMenu">运营工作台</RouterLink>
         <div class="nav-divider"></div>
         <RouterLink to="/products" @click="closeMenu">商品管理</RouterLink>
         <RouterLink to="/orders" @click="closeMenu">订单管理</RouterLink>

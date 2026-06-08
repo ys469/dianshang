@@ -11,8 +11,8 @@ const errorMsg = ref('');
 onMounted(async () => {
   try {
     await store.fetchSummary();
-  } catch (e) {
-    errorMsg.value = '加载仪表盘数据失败，请稍后刷新重试';
+  } catch {
+    errorMsg.value = '加载仪表盘数据失败，请稍后刷新重试。';
   } finally {
     loading.value = false;
   }
@@ -26,19 +26,37 @@ const metricCards = computed(() => [
   { label: '复购率', value: `${store.summary.repurchaseRate}%` },
   { label: '充值金额', value: `¥${store.summary.rechargeAmount.toLocaleString()}` }
 ]);
+
+const operationalBoards = computed(() => [
+  {
+    title: '履约处理',
+    points: ['查看待发货订单', '核对收货地址与手机号', '补录物流公司和运单号']
+  },
+  {
+    title: '会员运营',
+    points: ['调整会员等级与成长值', '处理储值、积分和优惠券发放', '查看复购与消费趋势']
+  },
+  {
+    title: '营销执行',
+    points: ['管理秒杀、拼团与签到', '上线不同门槛优惠券', '同步前台活动展示价格']
+  },
+  {
+    title: '财务核对',
+    points: ['检查销售额与充值到账', '查看支付方式分布', '对照退款与流水记录']
+  }
+]);
 </script>
 
 <template>
   <div class="page">
     <div class="page-header">
       <div>
-        <h3>仪表盘</h3>
+        <h3>经营看板</h3>
         <p>欢迎回来，{{ authStore.user?.nickname ?? '管理员' }}</p>
       </div>
     </div>
 
     <div v-if="errorMsg" class="info-banner">{{ errorMsg }}</div>
-
     <div v-if="loading" class="loading-text">加载中...</div>
 
     <section v-else class="metrics-grid">
@@ -48,24 +66,12 @@ const metricCards = computed(() => [
       </article>
     </section>
 
-    <section class="panel-grid">
-      <article class="panel">
-        <header><h3>首版运营重点</h3></header>
-        <ul class="quiet-list">
-          <li>会员价与优惠券的组合运营，提升复购率</li>
-          <li>首页楼层按拼团、秒杀、会员专区进行编排</li>
-          <li>快递到家与自提核销双模式并行</li>
-          <li>每日签到、积分商城提升用户活跃度</li>
+    <section class="board-grid">
+      <article v-for="board in operationalBoards" :key="board.title" class="board-card">
+        <h4>{{ board.title }}</h4>
+        <ul>
+          <li v-for="point in board.points" :key="point">{{ point }}</li>
         </ul>
-      </article>
-
-      <article class="panel">
-        <header><h3>系统覆盖模块</h3></header>
-        <div class="tag-list">
-          <span>商品</span><span>会员</span><span>订单</span>
-          <span>优惠券</span><span>拼团</span><span>秒杀</span>
-          <span>签到</span><span>CMS</span><span>自提点</span>
-        </div>
       </article>
     </section>
   </div>
@@ -85,5 +91,40 @@ const metricCards = computed(() => [
   border-radius: 8px;
   color: #1e40af;
   font-size: 13px;
+}
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.board-card {
+  padding: 18px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.board-card h4 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: #111827;
+}
+
+.board-card ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #475467;
+  display: grid;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+@media (max-width: 960px) {
+  .board-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

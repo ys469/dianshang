@@ -75,6 +75,10 @@ export interface OrderPayload {
   couponId?: string | null;
   couponTitle?: string | null;
   couponDiscount?: number;
+  logisticsCompany?: string | null;
+  trackingNo?: string | null;
+  shippedAt?: string | null;
+  completedAt?: string | null;
   itemCount: number;
   itemSummary: string;
   items: Array<{

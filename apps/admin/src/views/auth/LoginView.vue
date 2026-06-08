@@ -111,8 +111,7 @@ async function handleLogin() {
       </form>
 
       <div class="helper-box">
-        <p>管理员账号由平台统一分配和维护。</p>
-        <p>若需重置管理员密码，请使用后台账号管理流程处理。</p>
+        <p>仅支持管理员账号登录。</p>
       </div>
     </div>
   </div>

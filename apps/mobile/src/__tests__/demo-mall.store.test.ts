@@ -620,6 +620,75 @@ describe('demo mall store', () => {
     expect(firstResult.success).toBe(true);
   });
 
+  it('keeps logistics, completion, and coupon fields when syncing orders from the member api', async () => {
+    profileState.orders = [
+      {
+        id: 'o-ship-1',
+        orderNo: 'SM901',
+        status: '待收货',
+        paymentMethod: 'balance',
+        paymentState: 'success',
+        paymentChannel: 'balance',
+        transactionId: null,
+        paidAt: '2026-06-06T10:00:00.000Z',
+        fulfillmentMode: '快递到家',
+        payableAmount: 39.9,
+        totalAmount: 49.9,
+        customerName: 'Formal Member',
+        customerMobile: '13800138000',
+        address: 'Shanghai Pudong Zhangjiang Rd 88',
+        createdAt: '2026-06-06 10:00:00',
+        cancelDeadlineAt: '2026-06-06T10:03:00.000Z',
+        cancelledAt: null,
+        canCancel: false,
+        couponId: 'c-001',
+        couponTitle: '满99减10',
+        couponDiscount: 10,
+        logisticsCompany: '顺丰速运',
+        trackingNo: 'SF1234567890',
+        shippedAt: '2026-06-06T12:00:00.000Z',
+        completedAt: null,
+        itemCount: 1,
+        itemSummary: 'Fresh Peach Box x1',
+        items: [
+          {
+            productId: 'p-001',
+            productName: 'Fresh Peach Box',
+            quantity: 1,
+            price: 49.9,
+            memberPrice: 39.9,
+            pricingSourceType: 'group_buying',
+            pricingContextId: 'gb-001'
+          }
+        ]
+      }
+    ];
+
+    const store = useDemoMallStore();
+    await store.login({
+      role: 'user',
+      account: '13800138000',
+      password: 'member123'
+    });
+
+    expect(store.orders[0]).toEqual(
+      expect.objectContaining({
+        orderNo: 'SM901',
+        logisticsCompany: '顺丰速运',
+        trackingNo: 'SF1234567890',
+        shippedAt: '2026-06-06T12:00:00.000Z',
+        couponTitle: '满99减10',
+        couponDiscount: 10
+      })
+    );
+    expect(store.orders[0].items[0]).toEqual(
+      expect.objectContaining({
+        productName: 'Fresh Peach Box',
+        memberPrice: 39.9
+      })
+    );
+  });
+
   it('tracks pending and submitted search keywords separately', () => {
     const store = useDemoMallStore();
 

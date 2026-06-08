@@ -1181,10 +1181,27 @@ function handleLogout() {
                 </div>
                 <p class="muted-text">{{ order.createdAt }}</p>
                 <p class="muted-text">共 {{ order.itemCount }} 件商品</p>
+                <p class="muted-text">支付方式：{{ order.paymentMethod === 'wechat' ? '微信支付' : '余额支付' }}</p>
+                <p class="muted-text">
+                  支付状态：{{
+                    order.paymentState === 'success'
+                      ? '支付成功'
+                      : order.paymentState === 'pending'
+                        ? '待支付'
+                        : order.paymentState === 'closed'
+                          ? '已关闭'
+                          : '处理中'
+                  }}
+                </p>
                 <p class="muted-text">收货地址：{{ order.address || '请先完善收货地址' }}</p>
                 <p v-if="order.couponTitle" class="muted-text">
                   已使用优惠券：{{ order.couponTitle }} -¥{{ (order.couponDiscount ?? 0).toFixed(2) }}
                 </p>
+                <p v-if="order.logisticsCompany || order.trackingNo" class="muted-text">
+                  物流信息：{{ order.logisticsCompany || '待分配快递' }} / {{ order.trackingNo || '待生成单号' }}
+                </p>
+                <p v-if="order.shippedAt" class="muted-text">发货时间：{{ order.shippedAt }}</p>
+                <p v-if="order.completedAt" class="muted-text">完成时间：{{ order.completedAt }}</p>
                 <p class="summary-total small">¥{{ order.total.toFixed(2) }}</p>
                 <div class="order-actions">
                   <span v-if="canCancelOrder(order)" class="countdown-chip">
@@ -1559,6 +1576,12 @@ p {
 .shortcut-grid {
   display: grid;
   gap: 16px;
+}
+
+.category-list,
+.menu-list,
+.order-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .topbar,
@@ -2321,15 +2344,29 @@ p {
   opacity: 0.55;
 }
 
-@media (max-width: 540px) {
+@media (max-width: 720px) {
   .banner-strip,
   .product-grid,
+  .category-list,
+  .menu-list,
+  .order-list,
   .shortcut-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .product-actions,
+  .confirm-footer {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 480px) {
+  .banner-strip,
+  .product-grid,
+  .category-list,
+  .menu-list,
+  .order-list,
+  .shortcut-grid,
   .category-grid,
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2345,6 +2382,15 @@ p {
 
   .search-row {
     display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .banner-strip,
+  .product-grid,
+  .category-list,
+  .menu-list,
+  .order-list,
+  .shortcut-grid {
     grid-template-columns: 1fr;
   }
 
