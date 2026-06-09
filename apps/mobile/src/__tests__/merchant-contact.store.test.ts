@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDemoMallStore } from '../h5-preview/store';
 import type { MemberProfile } from '../services/api';
 
@@ -47,7 +47,7 @@ const {
   getMerchantMessagesMock: vi.fn(async () => ({
     threadId: 'thread-001',
     memberId: 'u-100',
-    merchantName: '商城运营',
+    merchantName: 'Merchant Team',
     unreadCount: 0,
     updatedAt: '2026-06-07T09:30:00.000Z',
     messages: [
@@ -55,8 +55,8 @@ const {
         id: 'msg-001',
         senderRole: 'admin' as const,
         senderId: 'admin-1',
-        senderName: '商城运营',
-        content: '您好，这里是商家消息中心。',
+        senderName: 'Merchant Team',
+        content: 'Hello, this is the merchant inbox.',
         createdAt: '2026-06-07T09:30:00.000Z',
         readByMember: true,
         readByAdmin: true
@@ -66,7 +66,7 @@ const {
   sendMerchantMessageMock: vi.fn(async ({ message }: { message: string }) => ({
     threadId: 'thread-001',
     memberId: 'u-100',
-    merchantName: '商城运营',
+    merchantName: 'Merchant Team',
     unreadCount: 1,
     updatedAt: '2026-06-07T09:35:00.000Z',
     messages: [
@@ -74,8 +74,8 @@ const {
         id: 'msg-001',
         senderRole: 'admin' as const,
         senderId: 'admin-1',
-        senderName: '商城运营',
-        content: '您好，这里是商家消息中心。',
+        senderName: 'Merchant Team',
+        content: 'Hello, this is the merchant inbox.',
         createdAt: '2026-06-07T09:30:00.000Z',
         readByMember: true,
         readByAdmin: true
@@ -116,6 +116,7 @@ vi.mock('../services/api', async () => {
 
 describe('merchant contact store flow', () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     setActivePinia(createPinia());
     loginMock.mockClear();
     getProfileMock.mockClear();
@@ -123,6 +124,10 @@ describe('merchant contact store flow', () => {
     getCouponsMock.mockClear();
     getMerchantMessagesMock.mockClear();
     sendMerchantMessageMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('loads merchant conversations on login and routes replies into the merchant panel', async () => {
@@ -139,22 +144,97 @@ describe('merchant contact store flow', () => {
     expect(store.merchantMessages[0]).toEqual(
       expect.objectContaining({
         senderRole: 'admin',
-        content: '您好，这里是商家消息中心。'
+        content: 'Hello, this is the merchant inbox.'
       })
     );
 
-    const result = await store.sendMerchantMessage('我想确认今天的发货时间');
+    const result = await store.sendMerchantMessage('Please confirm today’s ship time');
 
     expect(sendMerchantMessageMock).toHaveBeenCalledWith({
-      message: '我想确认今天的发货时间'
+      message: 'Please confirm today’s ship time'
     });
     expect(result.success).toBe(true);
     expect(store.activePanel).toBe('merchant');
     expect(store.merchantMessages.at(-1)).toEqual(
       expect.objectContaining({
         senderRole: 'member',
-        content: '我想确认今天的发货时间'
+        content: 'Please confirm today’s ship time'
       })
     );
+  });
+
+  it('pulls fresh merchant replies into the open panel without requiring a manual refresh', async () => {
+    getMerchantMessagesMock
+      .mockResolvedValueOnce({
+        threadId: 'thread-001',
+        memberId: 'u-100',
+        merchantName: 'Merchant Team',
+        unreadCount: 0,
+        updatedAt: '2026-06-07T09:30:00.000Z',
+        messages: [
+          {
+            id: 'msg-001',
+            senderRole: 'member' as const,
+            senderId: 'u-100',
+            senderName: 'Real Member',
+            content: 'Hi there',
+            createdAt: '2026-06-07T09:30:00.000Z',
+            readByMember: true,
+            readByAdmin: true
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        threadId: 'thread-001',
+        memberId: 'u-100',
+        merchantName: 'Merchant Team',
+        unreadCount: 1,
+        updatedAt: '2026-06-07T09:31:00.000Z',
+        messages: [
+          {
+            id: 'msg-001',
+            senderRole: 'member' as const,
+            senderId: 'u-100',
+            senderName: 'Real Member',
+            content: 'Hi there',
+            createdAt: '2026-06-07T09:30:00.000Z',
+            readByMember: true,
+            readByAdmin: true
+          },
+          {
+            id: 'msg-002',
+            senderRole: 'admin' as const,
+            senderId: 'admin-1',
+            senderName: 'Merchant Team',
+            content: 'We saw your message and are checking now.',
+            createdAt: '2026-06-07T09:31:00.000Z',
+            readByMember: false,
+            readByAdmin: true
+          }
+        ]
+      });
+
+    const store = useDemoMallStore();
+    await store.login({
+      role: 'user',
+      account: '13800138000',
+      password: 'member123'
+    });
+
+    store.openPanel('merchant');
+    store.startMerchantMessagePolling(3000);
+
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(getMerchantMessagesMock).toHaveBeenCalledTimes(2);
+    expect(store.unreadMessages).toBe(1);
+    expect(store.merchantMessages.at(-1)).toEqual(
+      expect.objectContaining({
+        senderRole: 'admin',
+        content: 'We saw your message and are checking now.'
+      })
+    );
+
+    store.stopMerchantMessagePolling();
   });
 });

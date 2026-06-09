@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { useAttentionStore } from '../stores/attention';
 import { useAuthStore } from '../stores/auth';
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
+const attentionStore = useAttentionStore();
 const menuOpen = ref(false);
 
 function closeMenu() {
@@ -18,9 +20,20 @@ function toggleMenu() {
 
 function handleLogout() {
   closeMenu();
+  attentionStore.reset();
   authStore.logout();
   router.replace('/login');
 }
+
+onMounted(() => {
+  if (authStore.isAdmin) {
+    attentionStore.startPolling();
+  }
+});
+
+onUnmounted(() => {
+  attentionStore.stopPolling();
+});
 
 watch(
   () => route.fullPath,
@@ -53,17 +66,52 @@ watch(
           ×
         </button>
       </div>
+
       <nav class="nav">
-        <RouterLink to="/quick" @click="closeMenu">运营工作台</RouterLink>
+        <RouterLink to="/quick" @click="closeMenu">
+          <span class="nav-label">运营工作台</span>
+        </RouterLink>
         <div class="nav-divider"></div>
-        <RouterLink to="/products" @click="closeMenu">商品管理</RouterLink>
-        <RouterLink to="/orders" @click="closeMenu">订单管理</RouterLink>
-        <RouterLink to="/members" @click="closeMenu">会员管理</RouterLink>
-        <RouterLink to="/marketing" @click="closeMenu">营销活动</RouterLink>
-        <RouterLink to="/merchant-messages" @click="closeMenu">商家消息</RouterLink>
+
+        <RouterLink to="/products" @click="closeMenu">
+          <span class="nav-label">商品管理</span>
+        </RouterLink>
+
+        <RouterLink to="/orders" @click="closeMenu">
+          <span class="nav-label">订单管理</span>
+          <span
+            v-if="attentionStore.pendingOrderCount"
+            class="nav-indicator"
+            :title="`待处理订单 ${attentionStore.pendingOrderCount} 条`"
+          ></span>
+        </RouterLink>
+
+        <RouterLink to="/members" @click="closeMenu">
+          <span class="nav-label">会员管理</span>
+        </RouterLink>
+
+        <RouterLink to="/marketing" @click="closeMenu">
+          <span class="nav-label">营销活动</span>
+        </RouterLink>
+
+        <RouterLink to="/merchant-messages" @click="closeMenu">
+          <span class="nav-label">商家消息</span>
+          <span
+            v-if="attentionStore.unreadMerchantMessageCount"
+            class="nav-indicator"
+            :title="`待回复商家消息 ${attentionStore.unreadMerchantMessageCount} 条`"
+          ></span>
+        </RouterLink>
+
         <div class="nav-divider"></div>
-        <RouterLink to="/finance" @click="closeMenu">财务对账</RouterLink>
-        <RouterLink to="/notifications" @click="closeMenu">消息通知</RouterLink>
+
+        <RouterLink to="/finance" @click="closeMenu">
+          <span class="nav-label">财务对账</span>
+        </RouterLink>
+
+        <RouterLink to="/notifications" @click="closeMenu">
+          <span class="nav-label">消息通知</span>
+        </RouterLink>
       </nav>
     </aside>
 
@@ -78,6 +126,7 @@ watch(
             <p>面向社区团购与会员超市的一体化运营面板</p>
           </div>
         </div>
+
         <div class="topbar-right">
           <span class="user-info">
             <span v-if="authStore.isAdmin" class="role-badge admin-badge">管理员</span>
@@ -156,7 +205,10 @@ watch(
 }
 
 .nav a {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 10px 14px;
   border-radius: 8px;
   color: #cbd5e1;
@@ -173,6 +225,20 @@ watch(
 .nav a.router-link-exact-active {
   background: #667eea;
   color: #ffffff;
+}
+
+.nav-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nav-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(30, 41, 59, 0.92);
+  flex-shrink: 0;
 }
 
 .menu-toggle,

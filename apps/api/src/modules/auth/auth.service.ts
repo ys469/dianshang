@@ -136,14 +136,21 @@ export class AuthService {
     }
 
     const nextPassword = this.generateTemporaryPassword();
-    const sendResult = await this.mailSenderService.sendPasswordReset({
-      email,
-      mobile,
-      nickname: user.nickname,
-      newPassword: nextPassword
-    });
-
     await this.authDbService.updatePassword(user.id, hashPassword(nextPassword));
+
+    let sendResult: Awaited<ReturnType<MailSenderService['sendPasswordReset']>>;
+
+    try {
+      sendResult = await this.mailSenderService.sendPasswordReset({
+        email,
+        mobile,
+        nickname: user.nickname,
+        newPassword: nextPassword
+      });
+    } catch (error) {
+      await this.authDbService.updatePassword(user.id, user.passwordHash);
+      throw error;
+    }
 
     return {
       mobile: user.mobile,

@@ -166,6 +166,7 @@ const INITIAL_POINTS = 0;
 const INITIAL_COUPONS = 0;
 const TOKEN_KEY = 'smart-member-mobile-token';
 const USER_KEY = 'smart-member-mobile-user';
+let merchantPollingTimer: ReturnType<typeof window.setInterval> | null = null;
 
 
 function normalizeSearchValue(value: string) {
@@ -447,8 +448,44 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.unreadMessages = payload?.unreadCount ?? 0;
     },
 
+    async syncMerchantConversation() {
+      if (!this.isAuthenticated || this.currentRole !== 'user') {
+        return null;
+      }
+
+      try {
+        const conversation = await memberClient.getMerchantMessages();
+        this.applyMerchantConversation(conversation);
+        return conversation;
+      } catch {
+        return null;
+      }
+    },
+
+    startMerchantMessagePolling(intervalMs = 3000) {
+      if (typeof window === 'undefined' || merchantPollingTimer) {
+        return;
+      }
+
+      merchantPollingTimer = window.setInterval(() => {
+        if (!this.isAuthenticated || this.currentRole !== 'user' || this.activePanel !== 'merchant') {
+          return;
+        }
+
+        void this.syncMerchantConversation();
+      }, intervalMs);
+    },
+
+    stopMerchantMessagePolling() {
+      if (merchantPollingTimer) {
+        window.clearInterval(merchantPollingTimer);
+        merchantPollingTimer = null;
+      }
+    },
+
     resetMemberSessionData() {
       const emptyState = createEmptyMemberState();
+      this.stopMerchantMessagePolling();
       this.walletBalance = emptyState.walletBalance;
       this.points = emptyState.points;
       this.coupons = emptyState.coupons;
@@ -692,6 +729,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
     },
 
     logout() {
+      this.stopMerchantMessagePolling();
       this.isAuthenticated = false;
       this.currentRole = 'user';
       this.currentUserName = '';
@@ -738,8 +776,26 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.activePanel = 'product';
     },
 
-    openPanel(panel: ActivePanel) {
+    openPanel(
+      panel: ActivePanel,
+      options: {
+        syncMerchantConversation?: boolean;
+      } = {}
+    ) {
+      const shouldSyncMerchantConversation = options.syncMerchantConversation ?? true;
+
+      if (panel !== 'merchant') {
+        this.stopMerchantMessagePolling();
+      }
+
       this.activePanel = panel;
+
+      if (panel === 'merchant') {
+        if (shouldSyncMerchantConversation) {
+          void this.syncMerchantConversation();
+        }
+        this.startMerchantMessagePolling();
+      }
     },
 
     openAdminShortcut(shortcut: AdminShortcutKey) {
@@ -755,6 +811,10 @@ export const useDemoMallStore = defineStore('demo-mall', {
     },
 
     closePanel() {
+      if (this.activePanel === 'merchant') {
+        this.stopMerchantMessagePolling();
+      }
+
       this.activePanel = null;
       this.selectedProduct = null;
     },
@@ -1111,7 +1171,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
           message: content
         });
         this.applyMerchantConversation(result);
-        this.activePanel = 'merchant';
+        this.openPanel('merchant', { syncMerchantConversation: false });
         this.feedbackMessage = '已发送给商家';
         return createResult(true, this.feedbackMessage, result);
       } catch (error) {
@@ -1146,7 +1206,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
         case 'checkin':
           return this.claimDailyCheckIn();
         case 'merchant':
-          this.activePanel = 'merchant';
+          this.openPanel('merchant');
           this.feedbackMessage = '已打开商家消息';
           return createResult(true, this.feedbackMessage);
         case 'support':
