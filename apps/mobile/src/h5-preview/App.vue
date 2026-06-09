@@ -481,6 +481,25 @@ function validateEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+function formatMessageTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const currentYear = new Date().getFullYear();
+
+  if (date.getFullYear() === currentYear) {
+    return `${month}-${day} ${hours}:${minutes}`;
+  }
+
+  return `${date.getFullYear()}-${month}-${day} ${hours}:${minutes}`;
+}
+
 async function handleLogin() {
   const account = loginForm.account.trim();
 
@@ -1225,7 +1244,10 @@ function handleLogout() {
                 :key="message.id"
                 :class="['chat-bubble', message.senderRole === 'admin' ? 'chat-assistant' : 'chat-user']"
               >
-                <strong>{{ message.senderRole === 'admin' ? message.senderName : '我' }}</strong>
+                <div class="chat-meta">
+                  <strong>{{ message.senderRole === 'admin' ? message.senderName : '我' }}</strong>
+                  <span class="chat-time">{{ formatMessageTime(message.createdAt) }}</span>
+                </div>
                 <p>{{ message.content }}</p>
               </article>
               <article v-if="!merchantMessages.length" class="info-card compact-card">
@@ -1656,6 +1678,20 @@ p {
 
 .chat-bubble strong {
   font-size: 12px;
+}
+
+.chat-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chat-time {
+  flex-shrink: 0;
+  color: inherit;
+  font-size: 11px;
+  opacity: 0.68;
 }
 
 .chat-bubble p {
