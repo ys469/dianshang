@@ -9,6 +9,7 @@ import {
   UseGuards
 } from '@nestjs/common';
 import { ok } from '../../common/api-response';
+import { CurrentUser } from '../../common/current-user.decorator';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
 import { Roles } from '../../common/roles.decorator';
 import { AuthDbService } from '../auth/auth-db.service';
@@ -80,6 +81,34 @@ export class AdminController {
   @Get('orders')
   getOrders() {
     return ok(this.runtimeDataService.getAdminOrders());
+  }
+
+  @Get('merchant-messages')
+  getMerchantMessages() {
+    return ok(this.runtimeDataService.getMerchantThreadsForAdmin());
+  }
+
+  @Get('merchant-messages/:threadId')
+  getMerchantMessageDetail(@Param('threadId') threadId: string) {
+    return ok(this.runtimeDataService.getMerchantConversationForAdmin(threadId));
+  }
+
+  @Post('merchant-messages/:threadId/reply')
+  replyMerchantMessage(
+    @Param('threadId') threadId: string,
+    @Body() body: { message: string },
+    @CurrentUser()
+    user?: {
+      nickname?: string;
+    }
+  ) {
+    return ok(
+      this.runtimeDataService.replyMerchantMessageFromAdmin(threadId, {
+        message: body.message,
+        adminName: user?.nickname ?? '商家管理员'
+      }),
+      'merchant reply sent'
+    );
   }
 
   @Patch('orders/:orderNo/status')

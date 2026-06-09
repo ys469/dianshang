@@ -138,6 +138,28 @@ interface NotificationRecord {
   createdAt: string;
 }
 
+interface MerchantMessageRecord {
+  id: string;
+  senderRole: 'member' | 'admin';
+  senderId: string | null;
+  senderName: string;
+  content: string;
+  createdAt: string;
+  readByMember: boolean;
+  readByAdmin: boolean;
+}
+
+interface MerchantThreadRecord {
+  id: string;
+  memberId: string;
+  memberAuthUserId: string | null;
+  memberNickname: string;
+  memberMobile: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: MerchantMessageRecord[];
+}
+
 interface CouponRecord {
   id: string;
   title: string;
@@ -235,6 +257,7 @@ interface RuntimeState {
   rechargeRecords: RechargeRecord[];
   transactions: TransactionRecord[];
   systemNotifications: NotificationRecord[];
+  merchantThreads: MerchantThreadRecord[];
 }
 
 interface RuntimeStateRow extends RowDataPacket {
@@ -378,6 +401,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
   private members: MemberRecord[] = this.buildSeedMembers();
   private rechargeRecords: RechargeRecord[] = [];
   private transactions: TransactionRecord[] = this.buildSeedTransactions();
+  private merchantThreads: MerchantThreadRecord[] = [];
   private systemNotifications: NotificationRecord[] = [
     {
       id: 'notice-system-upgrade',
@@ -1716,6 +1740,138 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  getMerchantConversationForMember(input: {
+    authUserId?: string | null;
+    mobile?: string | null;
+    nickname?: string;
+    memberLevel?: string | null;
+  }) {
+    const member =
+      this.findMember(input.authUserId ?? null, input.mobile ?? null) ??
+      this.ensureMemberProfile({
+        authUserId: input.authUserId ?? null,
+        mobile: input.mobile ?? '',
+        nickname: input.nickname ?? '商城会员',
+        memberLevel: input.memberLevel ?? '普通会员'
+      });
+    const thread = this.findMerchantThreadByMemberId(member.id);
+
+    if (!thread) {
+      return {
+        threadId: null,
+        memberId: member.id,
+        merchantName: '商家客服',
+        unreadCount: 0,
+        updatedAt: null,
+        messages: [] as MerchantMessageRecord[]
+      };
+    }
+
+    this.syncMerchantThreadMember(thread, member);
+    const changed = this.markMerchantThreadReadByMember(thread);
+    if (changed) {
+      this.persistState();
+    }
+
+    return this.toMemberMerchantConversation(thread);
+  }
+
+  sendMerchantMessageFromMember(input: {
+    authUserId?: string | null;
+    mobile?: string | null;
+    nickname?: string;
+    memberLevel?: string | null;
+    message: string;
+  }) {
+    const content = input.message.trim();
+    if (!content) {
+      throw new BadRequestException('商家消息不能为空');
+    }
+
+    const member =
+      this.findMember(input.authUserId ?? null, input.mobile ?? null) ??
+      this.ensureMemberProfile({
+        authUserId: input.authUserId ?? null,
+        mobile: input.mobile ?? '',
+        nickname: input.nickname ?? '商城会员',
+        memberLevel: input.memberLevel ?? '普通会员'
+      });
+    const thread = this.ensureMerchantThread(member);
+    const createdAt = new Date().toISOString();
+
+    thread.messages.push({
+      id: `merchant-message-${Date.now()}`,
+      senderRole: 'member',
+      senderId: member.id,
+      senderName: member.nickname,
+      content,
+      createdAt,
+      readByMember: true,
+      readByAdmin: false
+    });
+    thread.updatedAt = createdAt;
+
+    this.persistState();
+    return this.toMemberMerchantConversation(thread);
+  }
+
+  getMerchantThreadsForAdmin() {
+    return this.merchantThreads
+      .map((thread) => this.toAdminMerchantThread(thread))
+      .sort(
+        (left, right) =>
+          new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+      );
+  }
+
+  getMerchantConversationForAdmin(threadId: string) {
+    const thread = this.merchantThreads.find((item) => item.id === threadId);
+    if (!thread) {
+      throw new NotFoundException('商家消息线程不存在');
+    }
+
+    const changed = this.markMerchantThreadReadByAdmin(thread);
+    if (changed) {
+      this.persistState();
+    }
+
+    return this.toAdminMerchantThreadDetail(thread);
+  }
+
+  replyMerchantMessageFromAdmin(
+    threadId: string,
+    input: {
+      message: string;
+      adminName?: string | null;
+    }
+  ) {
+    const thread = this.merchantThreads.find((item) => item.id === threadId);
+    if (!thread) {
+      throw new NotFoundException('商家消息线程不存在');
+    }
+
+    const content = input.message.trim();
+    if (!content) {
+      throw new BadRequestException('回复内容不能为空');
+    }
+
+    const createdAt = new Date().toISOString();
+    thread.messages.push({
+      id: `merchant-reply-${Date.now()}`,
+      senderRole: 'admin',
+      senderId: null,
+      senderName: input.adminName?.trim() || '商家管理员',
+      content,
+      createdAt,
+      readByMember: false,
+      readByAdmin: true
+    });
+    thread.updatedAt = createdAt;
+
+    this.persistState();
+    return this.toAdminMerchantThreadDetail(thread);
+  }
+
   getDashboardSummary() {
     const todayOrders = this.orders.filter(
       (order) => isToday(order.createdAt) && order.paymentState === 'success'
@@ -1839,10 +1995,37 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
         content: `《${product.name}》库存仅剩 ${product.stock} 件，请及时补货。`,
         type: 'alert',
         read: false,
-        createdAt: new Date().toISOString()
-      }));
+          createdAt: new Date().toISOString()
+        }));
 
-    return [...orderNotifications, ...rechargeNotifications, ...stockAlerts, ...this.systemNotifications]
+    const merchantNotifications: NotificationRecord[] = this.merchantThreads
+      .map((thread) => {
+        const latestMemberMessage = [...thread.messages]
+          .reverse()
+          .find((message) => message.senderRole === 'member');
+
+        if (!latestMemberMessage) {
+          return null;
+        }
+
+        return {
+          id: `notice-merchant-${thread.id}`,
+          title: '联系商家新消息',
+          content: `${thread.memberNickname}（${thread.memberMobile}）留言：${latestMemberMessage.content}`,
+          type: 'merchant_message',
+          read: latestMemberMessage.readByAdmin,
+          createdAt: latestMemberMessage.createdAt
+        } satisfies NotificationRecord;
+      })
+      .filter(Boolean) as NotificationRecord[];
+
+    return [
+      ...orderNotifications,
+      ...rechargeNotifications,
+      ...merchantNotifications,
+      ...stockAlerts,
+      ...this.systemNotifications
+    ]
       .sort(
         (left, right) =>
           new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
@@ -2196,6 +2379,65 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     this.members.unshift(member);
     this.persistState();
     return member;
+  }
+
+  private findMerchantThreadByMemberId(memberId: string) {
+    return this.merchantThreads.find((thread) => thread.memberId === memberId) ?? null;
+  }
+
+  private ensureMerchantThread(member: MemberRecord) {
+    const existing = this.findMerchantThreadByMemberId(member.id);
+    if (existing) {
+      this.syncMerchantThreadMember(existing, member);
+      return existing;
+    }
+
+    const now = new Date().toISOString();
+    const thread: MerchantThreadRecord = {
+      id: `merchant-thread-${member.id}`,
+      memberId: member.id,
+      memberAuthUserId: member.authUserId,
+      memberNickname: member.nickname,
+      memberMobile: member.contactMobile || member.mobile,
+      createdAt: now,
+      updatedAt: now,
+      messages: []
+    };
+
+    this.merchantThreads.unshift(thread);
+    return thread;
+  }
+
+  private syncMerchantThreadMember(thread: MerchantThreadRecord, member: MemberRecord) {
+    thread.memberAuthUserId = member.authUserId;
+    thread.memberNickname = member.nickname;
+    thread.memberMobile = member.contactMobile || member.mobile;
+  }
+
+  private markMerchantThreadReadByMember(thread: MerchantThreadRecord) {
+    let changed = false;
+
+    for (const message of thread.messages) {
+      if (message.senderRole === 'admin' && !message.readByMember) {
+        message.readByMember = true;
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  private markMerchantThreadReadByAdmin(thread: MerchantThreadRecord) {
+    let changed = false;
+
+    for (const message of thread.messages) {
+      if (message.senderRole === 'member' && !message.readByAdmin) {
+        message.readByAdmin = true;
+        changed = true;
+      }
+    }
+
+    return changed;
   }
 
   private buildSeedCoupons() {
@@ -2640,6 +2882,19 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       if (parsed.systemNotifications) {
         this.systemNotifications = parsed.systemNotifications.map((item) => ({ ...item }));
       }
+
+      if (parsed.merchantThreads) {
+        this.merchantThreads = parsed.merchantThreads.map((thread) => ({
+          ...thread,
+          memberAuthUserId: thread.memberAuthUserId ?? null,
+          messages: (thread.messages ?? []).map((message) => ({
+            ...message,
+            senderId: message.senderId ?? null,
+            readByMember: message.readByMember ?? message.senderRole === 'member',
+            readByAdmin: message.readByAdmin ?? message.senderRole === 'admin'
+          }))
+        }));
+      }
     } catch {
       // Ignore malformed persisted data and keep seeded defaults.
     }
@@ -2674,7 +2929,8 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       members: this.members,
       rechargeRecords: this.rechargeRecords,
       transactions: this.transactions,
-      systemNotifications: this.systemNotifications
+      systemNotifications: this.systemNotifications,
+      merchantThreads: this.merchantThreads
     };
 
     writeFileSync(filePath, JSON.stringify(state, null, 2), 'utf8');
@@ -2804,6 +3060,19 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     if (parsed.systemNotifications) {
       this.systemNotifications = parsed.systemNotifications.map((item) => ({ ...item }));
     }
+
+    if (parsed.merchantThreads) {
+      this.merchantThreads = parsed.merchantThreads.map((thread) => ({
+        ...thread,
+        memberAuthUserId: thread.memberAuthUserId ?? null,
+        messages: (thread.messages ?? []).map((message) => ({
+          ...message,
+          senderId: message.senderId ?? null,
+          readByMember: message.readByMember ?? message.senderRole === 'member',
+          readByAdmin: message.readByAdmin ?? message.senderRole === 'admin'
+        }))
+      }));
+    }
   }
 
   private buildRuntimeStateSnapshot(): RuntimeState {
@@ -2817,7 +3086,8 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       members: this.members,
       rechargeRecords: this.rechargeRecords,
       transactions: this.transactions,
-      systemNotifications: this.systemNotifications
+      systemNotifications: this.systemNotifications,
+      merchantThreads: this.merchantThreads
     };
   }
 
@@ -2940,6 +3210,49 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       defaultConsignee: member.defaultConsignee,
       contactMobile: member.contactMobile,
       defaultAddress: member.defaultAddress
+    };
+  }
+
+  private toMemberMerchantConversation(thread: MerchantThreadRecord) {
+    return {
+      threadId: thread.id,
+      memberId: thread.memberId,
+      merchantName: '商家客服',
+      unreadCount: thread.messages.filter(
+        (message) => message.senderRole === 'admin' && !message.readByMember
+      ).length,
+      updatedAt: thread.updatedAt,
+      messages: thread.messages.map((message) => ({ ...message }))
+    };
+  }
+
+  private toAdminMerchantThread(thread: MerchantThreadRecord) {
+    const latestMessage =
+      thread.messages.length > 0 ? thread.messages[thread.messages.length - 1] : null;
+
+    return {
+      threadId: thread.id,
+      memberId: thread.memberId,
+      memberNickname: thread.memberNickname,
+      memberMobile: thread.memberMobile,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+      messageCount: thread.messages.length,
+      adminUnreadCount: thread.messages.filter(
+        (message) => message.senderRole === 'member' && !message.readByAdmin
+      ).length,
+      memberUnreadCount: thread.messages.filter(
+        (message) => message.senderRole === 'admin' && !message.readByMember
+      ).length,
+      lastMessagePreview: latestMessage?.content ?? '',
+      lastSenderRole: latestMessage?.senderRole ?? null
+    };
+  }
+
+  private toAdminMerchantThreadDetail(thread: MerchantThreadRecord) {
+    return {
+      ...this.toAdminMerchantThread(thread),
+      messages: thread.messages.map((message) => ({ ...message }))
     };
   }
 

@@ -31,17 +31,29 @@ describe('production-facing copy', () => {
     expect(source).not.toContain('开发验证码');
   });
 
-  it('keeps register verification UI and exposes sms login for members', () => {
+  it('uses password login plus email-assisted recovery instead of sms verification during registration', () => {
     const mobileLoginSource = readFileSync(resolve(mobileRoot, 'src/pages/login/index.vue'), 'utf8');
     const h5PreviewSource = readFileSync(resolve(mobileRoot, 'src/h5-preview/App.vue'), 'utf8');
 
-    expect(mobileLoginSource).toContain("handleSendCode('register')");
-    expect(mobileLoginSource).toContain('form.smsCode');
-    expect(mobileLoginSource).toContain('验证码登录');
+    expect(mobileLoginSource).toContain('form.email');
+    expect(mobileLoginSource).toContain('resetEmail');
+    expect(mobileLoginSource).not.toContain("handleSendCode('register')");
+    expect(mobileLoginSource).not.toContain('form.smsCode');
+    expect(mobileLoginSource).not.toContain('验证码登录');
 
-    expect(h5PreviewSource).toContain("handleSendCode('register')");
-    expect(h5PreviewSource).toContain('registerForm.smsCode');
-    expect(h5PreviewSource).toContain('验证码登录');
+    expect(h5PreviewSource).toContain('registerForm.email');
+    expect(h5PreviewSource).toContain('resetForm.email');
+    expect(h5PreviewSource).not.toContain("handleSendCode('register')");
+    expect(h5PreviewSource).not.toContain('registerForm.smsCode');
+    expect(h5PreviewSource).not.toContain('验证码登录');
+  });
+
+  it('keeps AI customer service and merchant contact as separate member actions', () => {
+    const h5PreviewSource = readFileSync(resolve(mobileRoot, 'src/h5-preview/App.vue'), 'utf8');
+
+    expect(h5PreviewSource).toContain('AI客服');
+    expect(h5PreviewSource).toContain('联系商家');
+    expect(h5PreviewSource).not.toContain('在线客服');
   });
 
   it('keeps the public H5 login page member-only', () => {
@@ -78,7 +90,7 @@ describe('production-facing copy', () => {
   it('does not hardcode member asset values in the uni-app profile page', () => {
     const source = readFileSync(resolve(mobileRoot, 'src/pages/profile/index.vue'), 'utf8');
 
-    expect(source).not.toContain('¥120');
+    expect(source).not.toContain('楼120');
     expect(source).not.toContain("'580'");
     expect(source).not.toContain("'4'");
     expect(source).not.toContain('960');

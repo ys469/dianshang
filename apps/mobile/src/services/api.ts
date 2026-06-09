@@ -35,6 +35,7 @@ export interface AuthUser {
   role: 'user' | 'admin';
   nickname: string;
   mobile: string | null;
+  email: string | null;
   memberLevel: string | null;
 }
 
@@ -158,6 +159,32 @@ export interface CheckInPayload {
 export interface SupportChatPayload {
   reply: string;
   handoffSuggested: boolean;
+}
+
+export interface PasswordResetPayload {
+  mobile: string | null;
+  email: string;
+  nickname: string;
+  provider: 'mock' | 'smtp';
+  debugPassword?: string;
+}
+
+export interface MerchantConversationPayload {
+  threadId: string | null;
+  memberId: string;
+  merchantName: string;
+  unreadCount: number;
+  updatedAt: string | null;
+  messages: Array<{
+    id: string;
+    senderRole: 'member' | 'admin';
+    senderId: string | null;
+    senderName: string;
+    content: string;
+    createdAt: string;
+    readByMember: boolean;
+    readByAdmin: boolean;
+  }>;
 }
 
 interface ApiResponse<T> {
@@ -298,38 +325,21 @@ export const authClient = {
 
   async register(
     mobile: string,
+    email: string,
     nickname: string,
     password: string,
-    confirmPassword: string,
-    smsCode?: string
+    confirmPassword: string
   ): Promise<AuthPayload> {
-    const payload: {
-      mobile: string;
-      nickname: string;
-      password: string;
-      confirmPassword: string;
-      smsCode?: string;
-    } = { mobile, nickname, password, confirmPassword };
-
-    if (smsCode?.trim()) {
-      payload.smsCode = smsCode.trim();
-    }
-
     return fetchJson<AuthPayload>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ mobile, email, nickname, password, confirmPassword })
     });
   },
 
-  async resetPassword(
-    mobile: string,
-    password: string,
-    confirmPassword: string,
-    smsCode: string
-  ): Promise<{ mobile: string; nickname: string }> {
-    return fetchJson<{ mobile: string; nickname: string }>('/auth/reset-password', {
+  async resetPassword(mobile: string, email: string): Promise<PasswordResetPayload> {
+    return fetchJson<PasswordResetPayload>('/auth/reset-password', {
       method: 'POST',
-      body: JSON.stringify({ mobile, password, confirmPassword, smsCode })
+      body: JSON.stringify({ mobile, email })
     });
   },
 
@@ -417,6 +427,19 @@ export const memberClient = {
     history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   }) {
     return fetchJson<SupportChatPayload>('/member/support-chat', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async getMerchantMessages() {
+    return fetchJson<MerchantConversationPayload>('/member/merchant-messages', {
+      method: 'GET'
+    });
+  },
+
+  async sendMerchantMessage(payload: { message: string }) {
+    return fetchJson<MerchantConversationPayload>('/member/merchant-messages', {
       method: 'POST',
       body: JSON.stringify(payload)
     });

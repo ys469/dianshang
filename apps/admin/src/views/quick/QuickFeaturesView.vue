@@ -11,6 +11,12 @@ const quickActions = [
   { icon: '💰', label: '财务对账', desc: '查看销售额、充值与交易流水', path: '/finance' },
   { icon: '🔔', label: '消息通知', desc: '跟进订单、发货与系统消息', path: '/notifications' }
 ];
+quickActions.splice(4, 0, {
+  icon: '💬',
+  label: '商家消息',
+  desc: '查看会员留言、售后咨询与联系商家会话',
+  path: '/merchant-messages'
+});
 </script>
 
 <template>

@@ -140,20 +140,12 @@ describe('/admin linked data', () => {
   });
 
   it('initializes a brand-new member profile with zero assets and preserves existing member history', async () => {
-    const smsResponse = await request(app.getHttpServer()).post('/auth/send-sms-code').send({
-      mobile: '13900000001',
-      scene: 'register'
-    });
-
-    expect(smsResponse.status).toBe(200);
-    const smsCode = smsResponse.body.data.debugCode as string;
-
     const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
       mobile: '13900000001',
+      email: 'new-member@example.com',
       nickname: '新会员测试',
       password: 'test123456',
-      confirmPassword: 'test123456',
-      smsCode
+      confirmPassword: 'test123456'
     });
 
     expect(registerResponse.status).toBe(201);

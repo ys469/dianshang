@@ -13,6 +13,7 @@ export interface AuthUserRecord {
   role: 'user' | 'admin';
   account: string;
   mobile: string | null;
+  email: string | null;
   nickname: string;
   passwordHash: string;
   memberLevel: string | null;
@@ -23,6 +24,7 @@ interface CreateUserInput {
   role: 'user' | 'admin';
   account: string;
   mobile: string | null;
+  email: string | null;
   nickname: string;
   passwordHash: string;
   memberLevel?: string | null;
@@ -33,6 +35,7 @@ interface AuthUserRow extends RowDataPacket {
   role: 'user' | 'admin';
   account: string;
   mobile: string | null;
+  email: string | null;
   nickname: string;
   password_hash: string;
   member_level: string | null;
@@ -82,6 +85,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
             role,
             account,
             mobile,
+            email,
             nickname,
             password_hash,
             member_level,
@@ -103,6 +107,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
           role,
           account,
           mobile,
+          email,
           nickname,
           password_hash,
           member_level,
@@ -138,6 +143,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
             role,
             account,
             mobile,
+            email,
             nickname,
             password_hash,
             member_level,
@@ -159,6 +165,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
           role,
           account,
           mobile,
+          email,
           nickname,
           password_hash,
           member_level,
@@ -181,12 +188,67 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async findByEmail(email: string) {
+    if (this.provider === 'mysql') {
+      const [rows] = await this.getPool().query<AuthUserRow[]>(
+        `
+          SELECT
+            id,
+            role,
+            account,
+            mobile,
+            email,
+            nickname,
+            password_hash,
+            member_level,
+            created_at
+          FROM auth_users
+          WHERE email = ?
+          LIMIT 1
+        `,
+        [email]
+      );
+
+      return rows[0] ? this.mapUserRecord(rows[0]) : null;
+    }
+
+    const statement = this.getSqlDatabase().prepare(
+      `
+        SELECT
+          id,
+          role,
+          account,
+          mobile,
+          email,
+          nickname,
+          password_hash,
+          member_level,
+          created_at
+        FROM auth_users
+        WHERE email = $email
+        LIMIT 1
+      `
+    );
+
+    try {
+      statement.bind({ $email: email });
+      if (!statement.step()) {
+        return null;
+      }
+
+      return this.mapUserRecord(statement.getAsObject());
+    } finally {
+      statement.free();
+    }
+  }
+
   async createUser(input: CreateUserInput) {
     const user: AuthUserRecord = {
       id: randomUUID(),
       role: input.role,
       account: input.account,
       mobile: input.mobile,
+      email: input.email,
       nickname: input.nickname,
       passwordHash: input.passwordHash,
       memberLevel: input.memberLevel ?? null,
@@ -201,17 +263,19 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
             role,
             account,
             mobile,
+            email,
             nickname,
             password_hash,
             member_level,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           user.id,
           user.role,
           user.account,
           user.mobile,
+          user.email,
           user.nickname,
           user.passwordHash,
           user.memberLevel,
@@ -228,6 +292,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
           role,
           account,
           mobile,
+          email,
           nickname,
           password_hash,
           member_level,
@@ -237,6 +302,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
           $role,
           $account,
           $mobile,
+          $email,
           $nickname,
           $passwordHash,
           $memberLevel,
@@ -248,6 +314,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
         $role: user.role,
         $account: user.account,
         $mobile: user.mobile,
+        $email: user.email,
         $nickname: user.nickname,
         $passwordHash: user.passwordHash,
         $memberLevel: user.memberLevel,
@@ -324,6 +391,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
         role VARCHAR(16) NOT NULL,
         account VARCHAR(128) NOT NULL UNIQUE,
         mobile VARCHAR(32) UNIQUE,
+        email VARCHAR(255) NULL UNIQUE,
         nickname VARCHAR(128) NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         member_level VARCHAR(64) NULL,
@@ -331,6 +399,8 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
         INDEX idx_auth_users_role_account (role, account)
       ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
     `);
+
+    await this.ensureMysqlEmailColumn();
 
     const migrated = await this.migrateLegacySqlJsUsersIfPresent();
     if (!migrated) {
@@ -356,6 +426,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
         role TEXT NOT NULL,
         account TEXT NOT NULL UNIQUE,
         mobile TEXT UNIQUE,
+        email TEXT UNIQUE,
         nickname TEXT NOT NULL,
         password_hash TEXT NOT NULL,
         member_level TEXT,
@@ -364,6 +435,12 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS idx_auth_users_role_account
       ON auth_users(role, account);
     `);
+
+    try {
+      this.database.run('ALTER TABLE auth_users ADD COLUMN email TEXT');
+    } catch {
+      // Existing databases may already include the column.
+    }
 
     await this.seedDefaultUsers();
     this.persist();
@@ -388,6 +465,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
       role: 'admin',
       account: 'admin',
       mobile: null,
+      email: 'admin@huakaibuxie.online',
       nickname: '\u8fd0\u8425\u7ba1\u7406\u5458',
       passwordHash: hashPassword('admin123')
     });
@@ -396,6 +474,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
       role: 'user',
       account: '13800138000',
       mobile: '13800138000',
+      email: 'member@example.com',
       nickname: '\u661f\u9009\u4f1a\u5458',
       memberLevel: '\u9ec4\u91d1\u4f1a\u5458',
       passwordHash: hashPassword('member123')
@@ -423,17 +502,19 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
             role,
             account,
             mobile,
+            email,
             nickname,
             password_hash,
             member_level,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           user.id,
           user.role,
           user.account,
           user.mobile,
+          user.email,
           user.nickname,
           user.passwordHash,
           user.memberLevel,
@@ -457,6 +538,12 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
     const database = new sql.Database(readFileSync(dbPath));
 
     try {
+      try {
+        database.run('ALTER TABLE auth_users ADD COLUMN email TEXT');
+      } catch {
+        // Ignore when the legacy database already contains the email column.
+      }
+
       const statement = database.prepare(
         `
           SELECT
@@ -464,6 +551,7 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
             role,
             account,
             mobile,
+            email,
             nickname,
             password_hash,
             member_level,
@@ -494,11 +582,27 @@ export class AuthDbService implements OnModuleInit, OnModuleDestroy {
       role: row.role === 'admin' ? 'admin' : 'user',
       account: String(row.account),
       mobile: row.mobile ? String(row.mobile) : null,
+      email: row.email ? String(row.email) : null,
       nickname: String(row.nickname),
       passwordHash: String(row.password_hash),
       memberLevel: row.member_level ? String(row.member_level) : null,
       createdAt: String(row.created_at)
     };
+  }
+
+  private async ensureMysqlEmailColumn() {
+    const [rows] = await this.getPool().query<Array<RowDataPacket & { Field: string }>>(
+      'SHOW COLUMNS FROM auth_users LIKE "email"'
+    );
+
+    if (!rows.length) {
+      await this.getPool().execute(
+        `
+          ALTER TABLE auth_users
+          ADD COLUMN email VARCHAR(255) NULL UNIQUE AFTER mobile
+        `
+      );
+    }
   }
 
   private persist() {

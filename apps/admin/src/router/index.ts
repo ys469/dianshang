@@ -10,6 +10,7 @@ import OrderListView from '../views/orders/OrderListView.vue';
 import MarketingView from '../views/marketing/MarketingView.vue';
 import FinanceView from '../views/finance/FinanceView.vue';
 import NotificationView from '../views/notifications/NotificationView.vue';
+import MerchantMessagesView from '../views/merchant/MerchantMessagesView.vue';
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -32,6 +33,7 @@ const router = createRouter({
         { path: '/orders', component: OrderListView },
         { path: '/members', component: MemberListView },
         { path: '/marketing', component: MarketingView },
+        { path: '/merchant-messages', component: MerchantMessagesView },
         { path: '/finance', component: FinanceView },
         { path: '/notifications', component: NotificationView }
       ]

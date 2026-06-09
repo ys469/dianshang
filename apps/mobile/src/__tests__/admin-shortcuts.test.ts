@@ -12,12 +12,21 @@ describe('public member H5 login surface', () => {
     expect(appVue).not.toContain('handleOpenAdminConsole');
   });
 
-  it('keeps member login, register, and reset entry points visible', () => {
+  it('keeps member login, register, and reset entry points visible without sms-login copy', () => {
     const appVue = readFileSync(resolve(__dirname, '../h5-preview/App.vue'), 'utf8');
 
     expect(appVue).toContain('密码登录');
-    expect(appVue).toContain('验证码登录');
     expect(appVue).toContain('注册会员账号');
     expect(appVue).toContain('忘记密码');
+    expect(appVue).toContain('邮箱');
+    expect(appVue).not.toContain('验证码登录');
+  });
+
+  it('shows both AI customer service and merchant contact actions', () => {
+    const appVue = readFileSync(resolve(__dirname, '../h5-preview/App.vue'), 'utf8');
+
+    expect(appVue).toContain('AI客服');
+    expect(appVue).toContain('联系商家');
+    expect(appVue).not.toContain('在线客服');
   });
 });

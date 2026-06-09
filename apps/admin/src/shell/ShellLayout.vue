@@ -60,6 +60,7 @@ watch(
         <RouterLink to="/orders" @click="closeMenu">订单管理</RouterLink>
         <RouterLink to="/members" @click="closeMenu">会员管理</RouterLink>
         <RouterLink to="/marketing" @click="closeMenu">营销活动</RouterLink>
+        <RouterLink to="/merchant-messages" @click="closeMenu">商家消息</RouterLink>
         <div class="nav-divider"></div>
         <RouterLink to="/finance" @click="closeMenu">财务对账</RouterLink>
         <RouterLink to="/notifications" @click="closeMenu">消息通知</RouterLink>

@@ -6,9 +6,11 @@ import {
   paymentsClient,
   type CheckInPayload,
   type HomePayload,
+  type MerchantConversationPayload,
   type MemberCouponPayload,
   type MemberProfile,
   type OrderPayload,
+  type PasswordResetPayload,
   type WechatRechargeSessionPayload
 } from '../services/api';
 import {
@@ -81,6 +83,14 @@ export interface SupportMessage {
   createdAt: string;
 }
 
+export interface MerchantMessage {
+  id: string;
+  senderRole: 'member' | 'admin';
+  senderName: string;
+  content: string;
+  createdAt: string;
+}
+
 export type ActivePanel =
   | 'product'
   | 'orders'
@@ -89,6 +99,7 @@ export type ActivePanel =
   | 'coupons'
   | 'points'
   | 'support'
+  | 'merchant'
   | null;
 
 export type ProfileAction =
@@ -98,7 +109,8 @@ export type ProfileAction =
   | 'coupons'
   | 'points'
   | 'checkin'
-  | 'support';
+  | 'support'
+  | 'merchant';
 
 export type LoginRole = 'user' | 'admin';
 
@@ -129,17 +141,15 @@ export interface SmsLoginPayload {
 
 export interface RegisterPayload {
   mobile: string;
+  email: string;
   nickname: string;
-  smsCode?: string;
   password: string;
   confirmPassword: string;
 }
 
 export interface ResetPasswordPayload {
   mobile: string;
-  password: string;
-  confirmPassword: string;
-  smsCode: string;
+  email: string;
 }
 
 export const adminShortcutDefinitions: AdminShortcutDefinition[] = [
@@ -365,8 +375,21 @@ function createSupportGreeting(): SupportMessage {
   };
 }
 
+function mapMerchantConversation(
+  payload: MerchantConversationPayload | null | undefined
+): MerchantMessage[] {
+  return (payload?.messages ?? []).map((message) => ({
+    id: message.id,
+    senderRole: message.senderRole,
+    senderName: message.senderName,
+    content: message.content,
+    createdAt: message.createdAt
+  }));
+}
+
 export const useDemoMallStore = defineStore('demo-mall', {
-  state: () => ({
+  state: () => {
+    const state = ({
     isAuthenticated: false,
     currentRole: 'user' as LoginRole,
     currentUserName: '',
@@ -386,14 +409,20 @@ export const useDemoMallStore = defineStore('demo-mall', {
     selectedProduct: null as CatalogProduct | null,
     feedbackMessage: '',
     orderSuccessNotice: null as OrderSuccessNotice | null,
-    unreadMessages: 2,
+    unreadMessages: 0,
     defaultConsignee: '',
     contactMobile: '',
     defaultAddress: '',
     supportMessages: [createSupportGreeting()] as SupportMessage[],
     supportReply: '在线客服通常会在 5 分钟内响应。',
+    merchantMessages: [] as MerchantMessage[],
+    merchantReplyHint: '商家会在营业时段尽快回复，并可直接查看您的订单与联系方式。',
     orderSubmitting: false
-  }),
+    }) as any;
+    state.supportReply = 'AI 客服可协助查询订单、余额、积分、充值和优惠券问题。';
+    state.merchantReplyHint = '商家会在营业时段尽快回复，并可直接查看您的订单与联系方式。';
+    return state;
+  },
   getters: {
     cartCount: (state) => state.cart.reduce((sum, item) => sum + item.quantity, 0),
     cartTotal: (state) => calculateTotal(state.cart),
@@ -413,6 +442,11 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.dailyCheckInClaimed = isTodayDate(profile.lastCheckInAt);
     },
 
+    applyMerchantConversation(payload: MerchantConversationPayload | null | undefined) {
+      this.merchantMessages = mapMerchantConversation(payload);
+      this.unreadMessages = payload?.unreadCount ?? 0;
+    },
+
     resetMemberSessionData() {
       const emptyState = createEmptyMemberState();
       this.walletBalance = emptyState.walletBalance;
@@ -427,18 +461,22 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.activePanel = null;
       this.selectedProduct = null;
       this.supportMessages = [createSupportGreeting()];
+      this.merchantMessages = [];
+      this.unreadMessages = 0;
     },
 
     async syncMemberData() {
-      const [profile, orders, memberCoupons] = await Promise.all([
+      const [profile, orders, memberCoupons, merchantConversation] = await Promise.all([
         memberClient.getProfile(),
         memberClient.getOrders().catch(() => []),
-        memberClient.getCoupons().catch(() => [])
+        memberClient.getCoupons().catch(() => []),
+        memberClient.getMerchantMessages().catch(() => null)
       ]);
 
       this.applyMemberProfile(profile);
       this.memberCoupons = memberCoupons;
       this.orders = orders.map((order) => mapApiOrderToDemoOrder(order));
+      this.applyMerchantConversation(merchantConversation);
     },
 
     async restoreSession() {
@@ -502,9 +540,15 @@ export const useDemoMallStore = defineStore('demo-mall', {
         setStorageItem(USER_KEY, JSON.stringify(result.user));
 
         await this.syncMemberData().catch(() => undefined);
+        this.feedbackMessage = '会员登录成功，欢迎回来';
+        return createResult(true, this.feedbackMessage, result);
 
         this.feedbackMessage = '\u4f1a\u5458\u767b\u5f55\u6210\u529f\uff0c\u6b22\u8fce\u56de\u6765';
-        return createResult(true, this.feedbackMessage);
+        this.feedbackMessage =
+          result.provider === 'mock' && result.debugPassword
+            ? `新密码已生成：${result.debugPassword}，请使用该密码登录后尽快修改。`
+            : '新的临时密码已发送到您的邮箱，请注意查收。';
+        return createResult(true, this.feedbackMessage, result as PasswordResetPayload);
       } catch (error) {
         this.isAuthenticated = false;
         this.currentRole = payload.role;
@@ -547,10 +591,10 @@ export const useDemoMallStore = defineStore('demo-mall', {
       try {
         const result = await authClient.register(
           payload.mobile,
+          payload.email,
           payload.nickname,
           payload.password,
-          payload.confirmPassword,
-          payload.smsCode
+          payload.confirmPassword
         );
 
         this.isAuthenticated = true;
@@ -574,12 +618,12 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
     async resetPassword(payload: ResetPasswordPayload) {
       try {
-        await authClient.resetPassword(
-          payload.mobile,
-          payload.password,
-          payload.confirmPassword,
-          payload.smsCode
-        );
+        const result = await authClient.resetPassword(payload.mobile, payload.email);
+        this.feedbackMessage =
+          result.provider === 'mock' && result.debugPassword
+            ? `新的临时密码：${result.debugPassword}，请登录后尽快修改。`
+            : '新的临时密码已发送到您的邮箱，请注意查收。';
+        return createResult(true, this.feedbackMessage, result);
         this.feedbackMessage = '密码已重置，请使用新密码登录';
         return createResult(true, this.feedbackMessage);
       } catch (error) {
@@ -665,6 +709,8 @@ export const useDemoMallStore = defineStore('demo-mall', {
       this.selectedProduct = null;
       this.dailyCheckInClaimed = false;
       this.supportMessages = [createSupportGreeting()];
+      this.merchantMessages = [];
+      this.unreadMessages = 0;
       removeStorageItem(TOKEN_KEY);
       removeStorageItem(USER_KEY);
       this.feedbackMessage = '已退出当前账号';
@@ -1053,6 +1099,28 @@ export const useDemoMallStore = defineStore('demo-mall', {
       }
     },
 
+    async sendMerchantMessage(message: string) {
+      const content = message.trim();
+      if (!content) {
+        this.feedbackMessage = '请输入想发送给商家的内容';
+        return createResult(false, this.feedbackMessage);
+      }
+
+      try {
+        const result = await memberClient.sendMerchantMessage({
+          message: content
+        });
+        this.applyMerchantConversation(result);
+        this.activePanel = 'merchant';
+        this.feedbackMessage = '已发送给商家';
+        return createResult(true, this.feedbackMessage, result);
+      } catch (error) {
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '商家消息发送失败，请稍后重试';
+        return createResult(false, this.feedbackMessage);
+      }
+    },
+
     handleProfileAction(action: ProfileAction) {
       switch (action) {
         case 'orders':
@@ -1077,6 +1145,10 @@ export const useDemoMallStore = defineStore('demo-mall', {
           return createResult(true, this.feedbackMessage);
         case 'checkin':
           return this.claimDailyCheckIn();
+        case 'merchant':
+          this.activePanel = 'merchant';
+          this.feedbackMessage = '已打开商家消息';
+          return createResult(true, this.feedbackMessage);
         case 'support':
           this.activePanel = 'support';
           this.feedbackMessage = 'AI 客服会话已打开';

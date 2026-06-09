@@ -1,38 +1,25 @@
 <script setup lang="ts">
-import { onUnmounted, reactive, ref } from 'vue';
+import { reactive, ref } from 'vue';
 import { useAuthStore } from '../../stores/auth';
 
 type AuthMode = 'login' | 'register' | 'reset';
-type LoginMethod = 'password' | 'sms';
 type MessageType = 'info' | 'success' | 'error';
 
 const authStore = useAuthStore();
 const mode = ref<AuthMode>('login');
-const loginMethod = ref<LoginMethod>('password');
 const message = ref('');
 const messageType = ref<MessageType>('info');
 const submitting = ref(false);
-const sendingScene = ref<'register' | 'reset_password' | 'login' | null>(null);
-const registerCountdown = ref(0);
-const resetCountdown = ref(0);
-const loginCountdown = ref(0);
-
-let registerTimer: ReturnType<typeof setInterval> | null = null;
-let resetTimer: ReturnType<typeof setInterval> | null = null;
-let loginTimer: ReturnType<typeof setInterval> | null = null;
 
 const form = reactive({
   account: '',
   password: '',
-  loginSmsCode: '',
   mobile: '',
+  email: '',
   nickname: '',
-  smsCode: '',
   confirmPassword: '',
   resetMobile: '',
-  resetSmsCode: '',
-  resetPassword: '',
-  resetConfirmPassword: ''
+  resetEmail: ''
 });
 
 function setMessage(type: MessageType, value: string) {
@@ -44,141 +31,42 @@ function validateMobile(value: string) {
   return /^1[3-9]\d{9}$/.test(value);
 }
 
-function clearRegisterTimer() {
-  if (registerTimer) {
-    clearInterval(registerTimer);
-    registerTimer = null;
-  }
+function validateEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
-function clearResetTimer() {
-  if (resetTimer) {
-    clearInterval(resetTimer);
-    resetTimer = null;
-  }
-}
-
-function clearLoginTimer() {
-  if (loginTimer) {
-    clearInterval(loginTimer);
-    loginTimer = null;
-  }
-}
-
-function startCountdown(scene: 'register' | 'reset_password' | 'login', seconds = 60) {
-  if (scene === 'register') {
-    clearRegisterTimer();
-    registerCountdown.value = seconds;
-    registerTimer = setInterval(() => {
-      registerCountdown.value -= 1;
-      if (registerCountdown.value <= 0) {
-        clearRegisterTimer();
-      }
-    }, 1000);
-    return;
-  }
-
-  if (scene === 'login') {
-    clearLoginTimer();
-    loginCountdown.value = seconds;
-    loginTimer = setInterval(() => {
-      loginCountdown.value -= 1;
-      if (loginCountdown.value <= 0) {
-        clearLoginTimer();
-      }
-    }, 1000);
-    return;
-  }
-
-  clearResetTimer();
-  resetCountdown.value = seconds;
-  resetTimer = setInterval(() => {
-    resetCountdown.value -= 1;
-    if (resetCountdown.value <= 0) {
-      clearResetTimer();
-    }
-  }, 1000);
-}
-
-async function handleSendCode(scene: 'register' | 'reset_password' | 'login') {
-  const mobile =
-    scene === 'register' ? form.mobile : scene === 'login' ? form.account : form.resetMobile;
-
-  if (!validateMobile(mobile)) {
-    setMessage('error', '请输入正确的手机号');
-    return;
-  }
-
-  sendingScene.value = scene;
-  try {
-    const result = await authStore.sendSmsCode(mobile, scene);
-
-    startCountdown(scene);
-    setMessage(
-      'success',
-      result.provider === 'mock' && result.debugCode
-        ? `验证码已发送，当前测试验证码：${result.debugCode}`
-        : '验证码已发送，请留意短信'
-    );
-  } catch (error: unknown) {
-    setMessage('error', error instanceof Error ? error.message : '验证码发送失败');
-  } finally {
-    sendingScene.value = null;
-  }
+function switchMode(nextMode: AuthMode) {
+  mode.value = nextMode;
+  setMessage('info', '');
 }
 
 async function handleLogin() {
   setMessage('info', '');
 
-  if (!form.account) {
-    setMessage('error', loginMethod.value === 'password' ? '请填写账号和密码' : '请输入已注册手机号');
+  if (!validateMobile(form.account.trim())) {
+    setMessage('error', '请输入已注册手机号');
     return;
   }
 
-  if (loginMethod.value === 'password') {
-    if (!form.password) {
-      setMessage('error', '请填写账号和密码');
-      return;
-    }
+  if (!form.password) {
+    setMessage('error', '请输入密码');
+    return;
+  }
 
-    if (form.password.length < 6) {
-      setMessage('error', '密码至少 6 位');
-      return;
-    }
-  } else {
-    if (!validateMobile(form.account.trim())) {
-      setMessage('error', '请输入已注册手机号');
-      return;
-    }
-
-    if (!form.loginSmsCode.trim()) {
-      setMessage('error', '请输入短信验证码');
-      return;
-    }
+  if (form.password.length < 6) {
+    setMessage('error', '密码至少 6 位');
+    return;
   }
 
   submitting.value = true;
   try {
-    if (loginMethod.value === 'password') {
-      await authStore.login('user', form.account.trim(), form.password);
-    } else {
-      await authStore.smsLogin(form.account.trim(), form.loginSmsCode.trim());
-    }
-
-    setMessage('success', '登录成功');
+    await authStore.login('user', form.account.trim(), form.password);
     form.password = '';
-    form.loginSmsCode = '';
+    setMessage('success', '登录成功');
     uni.navigateBack();
   } catch (error: unknown) {
     const text = error instanceof Error ? error.message : '登录失败';
-    setMessage(
-      'error',
-      text.includes('401')
-        ? loginMethod.value === 'password'
-          ? '账号或密码错误'
-          : '手机号或验证码错误'
-        : text
-    );
+    setMessage('error', text.includes('401') ? '手机号或密码错误' : text);
   } finally {
     submitting.value = false;
   }
@@ -187,13 +75,18 @@ async function handleLogin() {
 async function handleRegister() {
   setMessage('info', '');
 
-  if (!validateMobile(form.mobile)) {
+  if (!validateMobile(form.mobile.trim())) {
     setMessage('error', '请输入正确的手机号');
     return;
   }
 
+  if (!validateEmail(form.email.trim())) {
+    setMessage('error', '请输入正确的邮箱');
+    return;
+  }
+
   if (form.nickname.trim().length < 2) {
-    setMessage('error', '昵称至少 2 个字符');
+    setMessage('error', '昵称至少 2 个字');
     return;
   }
 
@@ -210,18 +103,19 @@ async function handleRegister() {
   submitting.value = true;
   try {
     await authStore.register(
-      form.mobile,
+      form.mobile.trim(),
+      form.email.trim(),
       form.nickname.trim(),
       form.password,
-      form.confirmPassword,
-      form.smsCode.trim() || undefined
+      form.confirmPassword
     );
-    form.smsCode = '';
+    form.password = '';
+    form.confirmPassword = '';
     setMessage('success', '注册成功，已自动登录');
     uni.navigateBack();
   } catch (error: unknown) {
     const text = error instanceof Error ? error.message : '注册失败';
-    setMessage('error', text.includes('409') ? '该手机号已注册' : text);
+    setMessage('error', text.includes('409') ? '该手机号或邮箱已注册' : text);
   } finally {
     submitting.value = false;
   }
@@ -230,63 +124,38 @@ async function handleRegister() {
 async function handleResetPassword() {
   setMessage('info', '');
 
-  if (!validateMobile(form.resetMobile)) {
+  if (!validateMobile(form.resetMobile.trim())) {
     setMessage('error', '请输入正确的手机号');
     return;
   }
 
-  if (!form.resetSmsCode.trim()) {
-    setMessage('error', '请输入短信验证码');
-    return;
-  }
-
-  if (form.resetPassword.length < 6) {
-    setMessage('error', '新密码至少 6 位');
-    return;
-  }
-
-  if (form.resetPassword !== form.resetConfirmPassword) {
-    setMessage('error', '两次输入的新密码不一致');
+  if (!validateEmail(form.resetEmail.trim())) {
+    setMessage('error', '请输入注册邮箱');
     return;
   }
 
   submitting.value = true;
   try {
-    await authStore.resetPassword(
-      form.resetMobile,
-      form.resetPassword,
-      form.resetConfirmPassword,
-      form.resetSmsCode.trim()
+    const result = await authStore.resetPassword(
+      form.resetMobile.trim(),
+      form.resetEmail.trim()
     );
-    form.account = form.resetMobile;
+    form.account = form.resetMobile.trim();
     form.password = '';
-    form.resetSmsCode = '';
-    form.resetPassword = '';
-    form.resetConfirmPassword = '';
     mode.value = 'login';
-    setMessage('success', '密码已重置，请使用新密码登录');
+    setMessage(
+      'success',
+      result.provider === 'mock' && result.debugPassword
+        ? `新的临时密码：${result.debugPassword}`
+        : '新的临时密码已发送到邮箱，请查收后登录'
+    );
   } catch (error: unknown) {
     const text = error instanceof Error ? error.message : '重置密码失败';
-    setMessage('error', text.includes('404') ? '该手机号还没有注册' : text);
+    setMessage('error', text.includes('404') ? '手机号与邮箱不匹配' : text);
   } finally {
     submitting.value = false;
   }
 }
-
-function switchMode(nextMode: AuthMode) {
-  mode.value = nextMode;
-  if (nextMode === 'login') {
-    loginMethod.value = 'password';
-    form.loginSmsCode = '';
-  }
-  setMessage('info', '');
-}
-
-onUnmounted(() => {
-  clearRegisterTimer();
-  clearResetTimer();
-  clearLoginTimer();
-});
 </script>
 
 <template>
@@ -301,7 +170,7 @@ onUnmounted(() => {
               ? '会员登录'
               : mode === 'register'
                 ? '注册会员账号'
-                : '短信找回密码'
+                : '邮箱找回密码'
           }}
         </text>
       </view>
@@ -311,30 +180,17 @@ onUnmounted(() => {
       </view>
 
       <view v-if="mode === 'login'" class="form">
-        <view class="method-toggle">
-          <button
-            :class="['method-btn', { active: loginMethod === 'password' }]"
-            @tap="loginMethod = 'password'"
-          >
-            密码登录
-          </button>
-          <button
-            :class="['method-btn', { active: loginMethod === 'sms' }]"
-            @tap="loginMethod = 'sms'"
-          >
-            验证码登录
-          </button>
-        </view>
         <view class="form-item">
-          <text class="label">{{ loginMethod === 'password' ? '手机号 / 账号' : '已注册手机号' }}</text>
+          <text class="label">手机号</text>
           <input
             v-model="form.account"
             class="input"
-            :placeholder="loginMethod === 'password' ? '请输入手机号或账号' : '请输入已注册手机号'"
-            type="text"
+            placeholder="请输入已注册手机号"
+            type="number"
+            maxlength="11"
           />
         </view>
-        <view v-if="loginMethod === 'password'" class="form-item">
+        <view class="form-item">
           <text class="label">密码</text>
           <input
             v-model="form.password"
@@ -343,27 +199,8 @@ onUnmounted(() => {
             :password="true"
           />
         </view>
-        <view v-else class="form-item">
-          <text class="label">短信验证码</text>
-          <view class="code-row">
-            <input
-              v-model="form.loginSmsCode"
-              class="input code-input"
-              placeholder="请输入验证码"
-              type="number"
-              maxlength="6"
-            />
-            <button
-              class="code-btn"
-              :disabled="loginCountdown > 0 || sendingScene === 'login'"
-              @tap="handleSendCode('login')"
-            >
-              {{ loginCountdown > 0 ? `${loginCountdown}s` : '发送验证码' }}
-            </button>
-          </view>
-        </view>
         <button class="submit-btn" :loading="submitting" :disabled="submitting" @tap="handleLogin">
-          登录
+          进入会员商城
         </button>
         <button class="link-btn align-right" @tap="switchMode('reset')">忘记密码</button>
       </view>
@@ -380,23 +217,13 @@ onUnmounted(() => {
           />
         </view>
         <view class="form-item">
-          <text class="label">短信验证码</text>
-          <view class="code-row">
-            <input
-              v-model="form.smsCode"
-              class="input code-input"
-              placeholder="请输入验证码"
-              type="number"
-              maxlength="6"
-            />
-            <button
-              class="code-btn"
-              :disabled="registerCountdown > 0 || sendingScene === 'register'"
-              @tap="handleSendCode('register')"
-            >
-              {{ registerCountdown > 0 ? `${registerCountdown}s` : '发送验证码' }}
-            </button>
-          </view>
+          <text class="label">邮箱</text>
+          <input
+            v-model="form.email"
+            class="input"
+            placeholder="请输入常用邮箱"
+            type="text"
+          />
         </view>
         <view class="form-item">
           <text class="label">昵称</text>
@@ -412,7 +239,7 @@ onUnmounted(() => {
           <input
             v-model="form.password"
             class="input"
-            placeholder="请设置密码，至少 6 位"
+            placeholder="请设置至少 6 位密码"
             :password="true"
           />
         </view>
@@ -431,13 +258,13 @@ onUnmounted(() => {
           :disabled="submitting"
           @tap="handleRegister"
         >
-          注册
+          注册并登录
         </button>
       </view>
 
       <view v-else class="form">
         <view class="tip-box">
-          <text>重置密码同样需要先验证手机号，只有验证码正确时才允许修改密码。</text>
+          <text>填写注册手机号和邮箱后，系统会生成新的临时密码并发送到邮箱。</text>
         </view>
         <view class="form-item">
           <text class="label">手机号</text>
@@ -450,40 +277,12 @@ onUnmounted(() => {
           />
         </view>
         <view class="form-item">
-          <text class="label">短信验证码</text>
-          <view class="code-row">
-            <input
-              v-model="form.resetSmsCode"
-              class="input code-input"
-              placeholder="请输入验证码"
-              type="number"
-              maxlength="6"
-            />
-            <button
-              class="code-btn"
-              :disabled="resetCountdown > 0 || sendingScene === 'reset_password'"
-              @tap="handleSendCode('reset_password')"
-            >
-              {{ resetCountdown > 0 ? `${resetCountdown}s` : '发送验证码' }}
-            </button>
-          </view>
-        </view>
-        <view class="form-item">
-          <text class="label">新密码</text>
+          <text class="label">注册邮箱</text>
           <input
-            v-model="form.resetPassword"
+            v-model="form.resetEmail"
             class="input"
-            placeholder="请输入新密码"
-            :password="true"
-          />
-        </view>
-        <view class="form-item">
-          <text class="label">确认新密码</text>
-          <input
-            v-model="form.resetConfirmPassword"
-            class="input"
-            placeholder="请再次输入新密码"
-            :password="true"
+            placeholder="请输入注册邮箱"
+            type="text"
           />
         </view>
         <button
@@ -492,7 +291,7 @@ onUnmounted(() => {
           :disabled="submitting"
           @tap="handleResetPassword"
         >
-          重置密码
+          发送新密码到邮箱
         </button>
       </view>
 
@@ -624,85 +423,37 @@ onUnmounted(() => {
 }
 
 .input {
-  height: 84rpx;
-  padding: 0 24rpx;
-  border: 2rpx solid #eaecf0;
-  border-radius: 16rpx;
-  font-size: 28rpx;
+  width: 100%;
+  min-height: 88rpx;
+  padding: 0 28rpx;
+  border-radius: 18rpx;
   background: #f9fafb;
-}
-
-.code-row {
-  display: flex;
-  gap: 16rpx;
-}
-
-.method-toggle {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16rpx;
-}
-
-.method-btn {
-  height: 76rpx;
-  border: none;
-  border-radius: 16rpx;
-  background: #f3f4f6;
-  color: #667085;
-  font-size: 26rpx;
-  font-weight: 600;
-}
-
-.method-btn.active {
-  background: rgba(124, 77, 255, 0.14);
-  color: #7c4dff;
-}
-
-.code-input {
-  flex: 1;
-}
-
-.code-btn,
-.submit-btn {
-  border: none;
-  border-radius: 16rpx;
-}
-
-.code-btn {
-  flex-shrink: 0;
-  min-width: 210rpx;
-  height: 84rpx;
-  line-height: 84rpx;
-  background: rgba(124, 77, 255, 0.12);
-  color: #7c4dff;
-  font-size: 26rpx;
-  font-weight: 600;
-}
-
-.code-btn[disabled] {
-  opacity: 0.65;
+  border: 2rpx solid #e5e7eb;
+  font-size: 28rpx;
+  color: #111827;
+  box-sizing: border-box;
 }
 
 .submit-btn {
   margin-top: 8rpx;
-  height: 88rpx;
-  line-height: 88rpx;
+  border-radius: 18rpx;
   background: linear-gradient(135deg, #7c4dff 0%, #5f35db 100%);
   color: #ffffff;
   font-size: 30rpx;
-  font-weight: 600;
+  font-weight: 700;
+  padding: 24rpx 0;
+  border: none;
 }
 
 .submit-btn[disabled] {
-  opacity: 0.7;
+  opacity: 0.72;
 }
 
 .auth-footer {
+  margin-top: 28rpx;
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 12rpx;
-  margin-top: 28rpx;
 }
 
 .link-btn {

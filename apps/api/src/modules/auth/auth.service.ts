@@ -7,10 +7,11 @@ import {
   UnauthorizedException
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { randomInt } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { hashPassword, verifyPassword } from '../../common/crypto';
 import { RuntimeDataService } from '../runtime-data/runtime-data.service';
 import { AuthDbService, type AuthUserRecord } from './auth-db.service';
+import { MailSenderService } from './mail-sender.service';
 import type {
   LoginDto,
   RegisterDto,
@@ -28,12 +29,14 @@ export class AuthService {
     @Inject(AuthDbService) private readonly authDbService: AuthDbService,
     @Inject(JwtService) private readonly jwtService: JwtService,
     @Inject(RuntimeDataService) private readonly runtimeDataService: RuntimeDataService,
+    @Inject(MailSenderService) private readonly mailSenderService: MailSenderService,
     @Inject(SmsCodeStoreService) private readonly smsCodeStoreService: SmsCodeStoreService,
     @Inject(SmsSenderService) private readonly smsSenderService: SmsSenderService
   ) {}
 
   async sendSmsCode(dto: SendSmsCodeDto) {
-    const existingUser = await this.authDbService.findByMobile(dto.mobile);
+    const mobile = dto.mobile.trim();
+    const existingUser = await this.authDbService.findByMobile(mobile);
 
     if (dto.scene === 'register' && existingUser) {
       throw new ConflictException('该手机号已注册');
@@ -43,23 +46,23 @@ export class AuthService {
       (dto.scene === 'reset_password' || dto.scene === 'login') &&
       (!existingUser || existingUser.role !== 'user')
     ) {
-      throw new NotFoundException('该手机号未注册');
+      throw new NotFoundException('该手机号尚未注册');
     }
 
     const code = this.generateSmsCode();
     const expiresInSeconds = this.smsCodeStoreService.getCodeExpiresSeconds();
 
-    await this.smsCodeStoreService.saveCode(dto.mobile, dto.scene, code);
+    await this.smsCodeStoreService.saveCode(mobile, dto.scene, code);
 
     const sendResult = await this.smsSenderService.sendCode({
-      mobile: dto.mobile,
+      mobile,
       scene: dto.scene,
       code,
       expiresInSeconds
     });
 
     return {
-      mobile: dto.mobile,
+      mobile,
       scene: dto.scene,
       expiresInSeconds,
       ...sendResult
@@ -67,18 +70,19 @@ export class AuthService {
   }
 
   async smsLogin(dto: SmsLoginDto) {
-    const user = await this.authDbService.findByMobile(dto.mobile);
+    const mobile = dto.mobile.trim();
+    const user = await this.authDbService.findByMobile(mobile);
 
     if (!user || user.role !== 'user') {
-      throw new NotFoundException('该手机号未注册');
+      throw new NotFoundException('该手机号尚未注册');
     }
 
-    await this.assertValidSmsCode(dto.mobile, 'login', dto.smsCode);
+    await this.assertValidSmsCode(mobile, 'login', dto.smsCode);
 
     this.runtimeDataService.ensureMemberProfile({
       authUserId: user.id,
       nickname: user.nickname,
-      mobile: user.mobile ?? dto.mobile,
+      mobile: user.mobile ?? mobile,
       memberLevel: user.memberLevel
     });
 
@@ -88,16 +92,26 @@ export class AuthService {
   async register(dto: RegisterDto) {
     this.assertPasswordConfirmation(dto.password, dto.confirmPassword);
 
-    const existingUser = await this.authDbService.findByMobile(dto.mobile);
+    const mobile = dto.mobile.trim();
+    const email = dto.email.trim().toLowerCase();
+    const nickname = dto.nickname.trim();
+
+    const existingUser = await this.authDbService.findByMobile(mobile);
     if (existingUser) {
       throw new ConflictException('该手机号已注册');
     }
 
+    const existingEmailUser = await this.authDbService.findByEmail(email);
+    if (existingEmailUser) {
+      throw new ConflictException('该邮箱已被使用');
+    }
+
     const user = await this.authDbService.createUser({
       role: 'user',
-      account: dto.mobile,
-      mobile: dto.mobile,
-      nickname: dto.nickname.trim(),
+      account: mobile,
+      mobile,
+      email,
+      nickname,
       memberLevel: '普通会员',
       passwordHash: hashPassword(dto.password)
     });
@@ -105,7 +119,7 @@ export class AuthService {
     this.runtimeDataService.ensureMemberProfile({
       authUserId: user.id,
       nickname: user.nickname,
-      mobile: user.mobile ?? dto.mobile,
+      mobile: user.mobile ?? mobile,
       memberLevel: user.memberLevel
     });
 
@@ -113,25 +127,35 @@ export class AuthService {
   }
 
   async resetPassword(dto: ResetPasswordDto) {
-    this.assertPasswordConfirmation(dto.password, dto.confirmPassword);
+    const mobile = dto.mobile.trim();
+    const email = dto.email.trim().toLowerCase();
+    const user = await this.authDbService.findByMobile(mobile);
 
-    const user = await this.authDbService.findByMobile(dto.mobile);
-
-    if (!user || user.role !== 'user') {
-      throw new NotFoundException('该手机号未注册');
+    if (!user || user.role !== 'user' || user.email?.toLowerCase() !== email) {
+      throw new NotFoundException('手机号与邮箱不匹配');
     }
 
-    await this.assertValidSmsCode(dto.mobile, 'reset_password', dto.smsCode);
-    await this.authDbService.updatePassword(user.id, hashPassword(dto.password));
+    const nextPassword = this.generateTemporaryPassword();
+    const sendResult = await this.mailSenderService.sendPasswordReset({
+      email,
+      mobile,
+      nickname: user.nickname,
+      newPassword: nextPassword
+    });
+
+    await this.authDbService.updatePassword(user.id, hashPassword(nextPassword));
 
     return {
       mobile: user.mobile,
-      nickname: user.nickname
+      email,
+      nickname: user.nickname,
+      ...sendResult
     };
   }
 
   async login(dto: LoginDto) {
-    const user = await this.authDbService.findByRoleAndAccount(dto.role, dto.account);
+    const account = dto.account.trim();
+    const user = await this.authDbService.findByRoleAndAccount(dto.role, account);
     if (!user || !verifyPassword(dto.password, user.passwordHash)) {
       throw new UnauthorizedException(
         dto.role === 'admin' ? '管理员账号或密码错误' : '账号或密码错误'
@@ -164,6 +188,7 @@ export class AuthService {
       role: user.role,
       nickname: user.nickname,
       mobile: user.mobile,
+      email: user.email,
       memberLevel: user.memberLevel
     };
   }
@@ -181,6 +206,7 @@ export class AuthService {
         sub: user.id,
         account: user.account,
         mobile: user.mobile,
+        email: user.email,
         nickname: user.nickname,
         memberLevel: user.memberLevel,
         role: user.role
@@ -195,6 +221,7 @@ export class AuthService {
         role: user.role,
         nickname: user.nickname,
         mobile: user.mobile,
+        email: user.email,
         memberLevel: user.memberLevel
       }
     };
@@ -208,5 +235,9 @@ export class AuthService {
 
   private generateSmsCode() {
     return randomInt(0, 1000000).toString().padStart(6, '0');
+  }
+
+  private generateTemporaryPassword() {
+    return `Mall${randomBytes(4).toString('hex')}`;
   }
 }

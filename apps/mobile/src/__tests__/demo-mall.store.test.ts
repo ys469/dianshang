@@ -81,7 +81,7 @@ import type { HomePayload, MemberProfile, OrderPayload } from '../services/api';
         memberLevel: 'Gold'
       }
     })),
-    registerMock: vi.fn(async (mobile: string, nickname: string) => ({
+    registerMock: vi.fn(async (mobile: string, _email: string, nickname: string) => ({
       token: 'register-token',
       user: {
         id: 'user-new',
@@ -765,6 +765,7 @@ describe('demo mall store', () => {
 
     const result = await store.register({
       mobile: '13900000009',
+      email: 'new-member@example.com',
       nickname: 'New Member',
       password: 'test123456',
       confirmPassword: 'test123456'
@@ -773,10 +774,10 @@ describe('demo mall store', () => {
     expect(result.success).toBe(true);
     expect(registerMock).toHaveBeenCalledWith(
       '13900000009',
+      'new-member@example.com',
       'New Member',
       'test123456',
-      'test123456',
-      undefined
+      'test123456'
     );
     expect(store.currentUserName).toBe('New Member');
     expect(store.currentUserMobile).toBe('13900000009');

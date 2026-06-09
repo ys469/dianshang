@@ -17,7 +17,7 @@ describe('/auth', () => {
     mkdirSync(tempDir, { recursive: true });
     process.env.AUTH_DB_FILE = dbFile;
     process.env.JWT_SECRET = 'test-secret';
-    process.env.SMS_PROVIDER = 'mock';
+    process.env.EMAIL_PROVIDER = 'mock';
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule]
@@ -31,16 +31,17 @@ describe('/auth', () => {
     await app.close();
     delete process.env.AUTH_DB_FILE;
     delete process.env.JWT_SECRET;
-    delete process.env.SMS_PROVIDER;
+    delete process.env.EMAIL_PROVIDER;
 
     if (existsSync(dbFile)) {
       rmSync(dbFile, { force: true });
     }
   });
 
-  it('registers a member without requiring an sms code', async () => {
+  it('registers a member with email and lets the member log in with mobile and password', async () => {
     const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
       mobile: '13900000001',
+      email: 'member01@example.com',
       nickname: '测试会员',
       password: 'member-pass-123',
       confirmPassword: 'member-pass-123'
@@ -48,6 +49,7 @@ describe('/auth', () => {
 
     expect(registerResponse.status).toBe(201);
     expect(registerResponse.body.data.user.mobile).toBe('13900000001');
+    expect(registerResponse.body.data.user.email).toBe('member01@example.com');
     expect(registerResponse.body.data.user.role).toBe('user');
 
     const validLogin = await request(app.getHttpServer()).post('/auth/login').send({
@@ -64,6 +66,7 @@ describe('/auth', () => {
   it('rejects registration when password confirmation does not match', async () => {
     const response = await request(app.getHttpServer()).post('/auth/register').send({
       mobile: '13900000009',
+      email: 'mismatch@example.com',
       nickname: '确认失败会员',
       password: 'member-pass-123',
       confirmPassword: 'different-pass-456'
@@ -73,9 +76,10 @@ describe('/auth', () => {
     expect(String(response.body.message ?? '')).toContain('密码');
   });
 
-  it('resets a member password only when the reset sms code is valid', async () => {
+  it('resets a member password by sending a random new password to the registered email', async () => {
     const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
       mobile: '13900000002',
+      email: 'reset-member@example.com',
       nickname: '重置会员',
       password: 'before-reset-123',
       confirmPassword: 'before-reset-123'
@@ -83,31 +87,17 @@ describe('/auth', () => {
 
     expect(registerResponse.status).toBe(201);
 
-    const resetCodeResponse = await request(app.getHttpServer()).post('/auth/send-sms-code').send({
-      mobile: '13900000002',
-      scene: 'reset_password'
-    });
-
-    expect(resetCodeResponse.status).toBe(200);
-    expect(resetCodeResponse.body.data.scene).toBe('reset_password');
-
-    const invalidReset = await request(app.getHttpServer()).post('/auth/reset-password').send({
-      mobile: '13900000002',
-      password: 'after-reset-456',
-      confirmPassword: 'after-reset-456',
-      smsCode: '000000'
-    });
-
-    expect(invalidReset.status).toBe(400);
-
     const resetResponse = await request(app.getHttpServer()).post('/auth/reset-password').send({
       mobile: '13900000002',
-      password: 'after-reset-456',
-      confirmPassword: 'after-reset-456',
-      smsCode: resetCodeResponse.body.data.debugCode
+      email: 'reset-member@example.com'
     });
 
     expect(resetResponse.status).toBe(200);
+    expect(resetResponse.body.data.mobile).toBe('13900000002');
+    expect(resetResponse.body.data.email).toBe('reset-member@example.com');
+    expect(resetResponse.body.data.provider).toBe('mock');
+    expect(resetResponse.body.data.debugPassword).toBeTruthy();
+    expect(resetResponse.body.data.debugPassword).not.toBe('before-reset-123');
 
     const oldPasswordLogin = await request(app.getHttpServer()).post('/auth/login').send({
       role: 'user',
@@ -120,40 +110,30 @@ describe('/auth', () => {
     const newPasswordLogin = await request(app.getHttpServer()).post('/auth/login').send({
       role: 'user',
       account: '13900000002',
-      password: 'after-reset-456'
+      password: resetResponse.body.data.debugPassword
     });
 
     expect(newPasswordLogin.status).toBe(200);
     expect(newPasswordLogin.body.data.user.nickname).toBe('重置会员');
   });
 
-  it('logs a registered member in with a valid sms code', async () => {
+  it('rejects password reset when the provided mobile and email do not match the same account', async () => {
     const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
       mobile: '13900000003',
-      nickname: '验证码登录会员',
-      password: 'sms-login-123',
-      confirmPassword: 'sms-login-123'
+      email: 'owner@example.com',
+      nickname: '邮箱校验会员',
+      password: 'owner-pass-123',
+      confirmPassword: 'owner-pass-123'
     });
 
     expect(registerResponse.status).toBe(201);
 
-    const loginCodeResponse = await request(app.getHttpServer()).post('/auth/send-sms-code').send({
+    const resetResponse = await request(app.getHttpServer()).post('/auth/reset-password').send({
       mobile: '13900000003',
-      scene: 'login'
+      email: 'other@example.com'
     });
 
-    expect(loginCodeResponse.status).toBe(200);
-    expect(loginCodeResponse.body.data.scene).toBe('login');
-
-    const smsLoginResponse = await request(app.getHttpServer()).post('/auth/sms-login').send({
-      mobile: '13900000003',
-      smsCode: loginCodeResponse.body.data.debugCode
-    });
-
-    expect(smsLoginResponse.status).toBe(200);
-    expect(smsLoginResponse.body.data.token).toBeTruthy();
-    expect(smsLoginResponse.body.data.user.mobile).toBe('13900000003');
-    expect(smsLoginResponse.body.data.user.nickname).toBe('验证码登录会员');
+    expect(resetResponse.status).toBe(404);
   });
 
   it('keeps admin and member permissions separated', async () => {

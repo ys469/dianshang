@@ -134,6 +134,49 @@ export class MemberController {
     );
   }
 
+  @Get('merchant-messages')
+  getMerchantMessages(
+    @CurrentUser()
+    user?: {
+      sub?: string;
+      mobile?: string | null;
+      nickname?: string;
+      memberLevel?: string | null;
+    }
+  ) {
+    return ok(
+      this.runtimeDataService.getMerchantConversationForMember({
+        authUserId: user?.sub ?? null,
+        mobile: user?.mobile ?? null,
+        nickname: user?.nickname,
+        memberLevel: user?.memberLevel ?? null
+      })
+    );
+  }
+
+  @Post('merchant-messages')
+  sendMerchantMessage(
+    @Body() body: { message: string },
+    @CurrentUser()
+    user?: {
+      sub?: string;
+      mobile?: string | null;
+      nickname?: string;
+      memberLevel?: string | null;
+    }
+  ) {
+    return ok(
+      this.runtimeDataService.sendMerchantMessageFromMember({
+        authUserId: user?.sub ?? null,
+        mobile: user?.mobile ?? null,
+        nickname: user?.nickname,
+        memberLevel: user?.memberLevel ?? null,
+        message: body.message
+      }),
+      'merchant message sent'
+    );
+  }
+
   @Post('recharge')
   recharge(
     @Body() body: { amount: number },

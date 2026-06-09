@@ -24,24 +24,24 @@ export const useAuthStore = defineStore('auth', {
 
     async register(
       mobile: string,
+      email: string,
       nickname: string,
       password: string,
-      confirmPassword: string,
-      smsCode?: string
+      confirmPassword: string
     ) {
       const result = await authClient.register(
         mobile,
+        email,
         nickname,
         password,
-        confirmPassword,
-        smsCode
+        confirmPassword
       );
       this.setSession(result.token, result.user);
       return result;
     },
 
-    async resetPassword(mobile: string, password: string, confirmPassword: string, smsCode: string) {
-      return authClient.resetPassword(mobile, password, confirmPassword, smsCode);
+    async resetPassword(mobile: string, email: string) {
+      return authClient.resetPassword(mobile, email);
     },
 
     async sendSmsCode(mobile: string, scene: SmsScene) {

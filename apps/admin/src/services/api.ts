@@ -109,6 +109,33 @@ export interface NotificationItem {
   time: string;
 }
 
+export interface MerchantThreadItem {
+  threadId: string;
+  memberId: string;
+  memberNickname: string;
+  memberMobile: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  adminUnreadCount: number;
+  memberUnreadCount: number;
+  lastMessagePreview: string;
+  lastSenderRole: 'member' | 'admin' | null;
+}
+
+export interface MerchantThreadDetail extends MerchantThreadItem {
+  messages: Array<{
+    id: string;
+    senderRole: 'member' | 'admin';
+    senderId: string | null;
+    senderName: string;
+    content: string;
+    createdAt: string;
+    readByMember: boolean;
+    readByAdmin: boolean;
+  }>;
+}
+
 export interface CouponItem {
   id: string;
   title: string;
@@ -184,6 +211,7 @@ export interface AuthUser {
   role: 'user' | 'admin';
   nickname: string;
   mobile: string | null;
+  email: string | null;
   memberLevel: string | null;
 }
 
@@ -200,6 +228,14 @@ export interface SmsCodePayload {
   expiresInSeconds: number;
   provider: 'mock' | 'tencent';
   debugCode?: string;
+}
+
+export interface PasswordResetPayload {
+  mobile: string | null;
+  email: string;
+  nickname: string;
+  provider: 'mock' | 'smtp';
+  debugPassword?: string;
 }
 
 interface ApiResponse<T> {
@@ -352,6 +388,21 @@ export const apiClient = {
     return fetchJson<NotificationItem[]>('/admin/notifications');
   },
 
+  getMerchantMessageThreads() {
+    return fetchJson<MerchantThreadItem[]>('/admin/merchant-messages');
+  },
+
+  getMerchantMessageThread(threadId: string) {
+    return fetchJson<MerchantThreadDetail>(`/admin/merchant-messages/${threadId}`);
+  },
+
+  replyMerchantMessage(threadId: string, message: string) {
+    return fetchJson<MerchantThreadDetail>(`/admin/merchant-messages/${threadId}/reply`, {
+      method: 'POST',
+      body: JSON.stringify({ message })
+    });
+  },
+
   getCoupons() {
     return fetchJson<CouponItem[]>('/admin/marketing/coupons');
   },
@@ -468,38 +519,21 @@ export const authClient = {
 
   async register(
     mobile: string,
+    email: string,
     nickname: string,
     password: string,
-    confirmPassword: string,
-    smsCode?: string
+    confirmPassword: string
   ): Promise<AuthPayload> {
-    const payload: {
-      mobile: string;
-      nickname: string;
-      password: string;
-      confirmPassword: string;
-      smsCode?: string;
-    } = { mobile, nickname, password, confirmPassword };
-
-    if (smsCode?.trim()) {
-      payload.smsCode = smsCode.trim();
-    }
-
     return fetchJson<AuthPayload>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ mobile, email, nickname, password, confirmPassword })
     });
   },
 
-  async resetPassword(
-    mobile: string,
-    password: string,
-    confirmPassword: string,
-    smsCode: string
-  ): Promise<{ mobile: string; nickname: string }> {
-    return fetchJson<{ mobile: string; nickname: string }>('/auth/reset-password', {
+  async resetPassword(mobile: string, email: string): Promise<PasswordResetPayload> {
+    return fetchJson<PasswordResetPayload>('/auth/reset-password', {
       method: 'POST',
-      body: JSON.stringify({ mobile, password, confirmPassword, smsCode })
+      body: JSON.stringify({ mobile, email })
     });
   },
 

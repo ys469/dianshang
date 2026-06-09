@@ -11,7 +11,6 @@ import {
 
 type TabKey = 'home' | 'category' | 'cart' | 'profile';
 type AuthView = 'login' | 'register' | 'reset';
-type LoginMethod = 'password' | 'sms';
 
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'home', label: '首页' },
@@ -27,7 +26,8 @@ const profileMenus: Array<{ label: string; action: ProfileAction }> = [
   { label: '优惠券', action: 'coupons' },
   { label: '积分商城', action: 'points' },
   { label: '签到奖励', action: 'checkin' },
-  { label: '联系客服', action: 'support' }
+  { label: 'AI客服', action: 'support' },
+  { label: '联系商家', action: 'merchant' }
 ];
 
 const categoryKeywordMap: Record<string, string[]> = {
@@ -45,36 +45,24 @@ const homeStore = useHomeStore();
 const mallStore = useDemoMallStore();
 const activeTab = ref<TabKey>('home');
 const authView = ref<AuthView>('login');
-const loginMethod = ref<LoginMethod>('password');
 
 const loginForm = reactive({
   account: '',
-  password: '',
-  smsCode: ''
+  password: ''
 });
 
 const registerForm = reactive({
   mobile: '',
+  email: '',
   nickname: '',
-  smsCode: '',
   password: '',
   confirmPassword: ''
 });
 
 const resetForm = reactive({
   mobile: '',
-  smsCode: '',
-  password: '',
-  confirmPassword: ''
+  email: ''
 });
-
-const registerCountdown = ref(0);
-const resetCountdown = ref(0);
-const loginCountdown = ref(0);
-
-let registerTimer: ReturnType<typeof setInterval> | null = null;
-let resetTimer: ReturnType<typeof setInterval> | null = null;
-let loginTimer: ReturnType<typeof setInterval> | null = null;
 
 const { banners, categories, hasLoaded, isLoading, notice, sections } = storeToRefs(homeStore);
   const {
@@ -98,6 +86,8 @@ const { banners, categories, hasLoaded, isLoading, notice, sections } = storeToR
   searchQuery,
   selectedCategoryId,
   selectedProduct,
+  merchantMessages,
+  merchantReplyHint,
   supportMessages,
   supportReply,
   unreadMessages,
@@ -112,6 +102,8 @@ const addressForm = reactive({
 
 const supportDraft = ref('');
 const supportSubmitting = ref(false);
+const merchantDraft = ref('');
+const merchantSubmitting = ref(false);
 const rechargeSubmitting = ref(false);
 
 const nowTick = ref(Date.now());
@@ -188,15 +180,6 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  if (registerTimer) {
-    window.clearInterval(registerTimer);
-  }
-  if (resetTimer) {
-    window.clearInterval(resetTimer);
-  }
-  if (loginTimer) {
-    window.clearInterval(loginTimer);
-  }
   if (orderClock) {
     window.clearInterval(orderClock);
   }
@@ -218,10 +201,6 @@ watch(feedbackMessage, (message, _, onCleanup) => {
 
 function switchAuthView(nextView: AuthView) {
   authView.value = nextView;
-  if (nextView === 'login') {
-    loginMethod.value = 'password';
-    loginForm.smsCode = '';
-  }
   mallStore.clearFeedback();
 }
 
@@ -312,7 +291,9 @@ const panelTitle = computed(() => {
     case 'points':
       return '积分商城';
     case 'support':
-      return '在线客服';
+      return 'AI客服';
+    case 'merchant':
+      return '联系商家';
     default:
       return '';
   }
@@ -496,116 +477,41 @@ function validateMobile(value: string) {
   return /^1[3-9]\d{9}$/.test(value);
 }
 
-function startCountdown(scene: 'register' | 'reset_password' | 'login', seconds = 60) {
-  if (scene === 'register') {
-    if (registerTimer) {
-      window.clearInterval(registerTimer);
-    }
-    registerCountdown.value = seconds;
-    registerTimer = window.setInterval(() => {
-      registerCountdown.value -= 1;
-      if (registerCountdown.value <= 0 && registerTimer) {
-        window.clearInterval(registerTimer);
-        registerTimer = null;
-      }
-    }, 1000);
-    return;
-  }
-
-  if (scene === 'login') {
-    if (loginTimer) {
-      window.clearInterval(loginTimer);
-    }
-    loginCountdown.value = seconds;
-    loginTimer = window.setInterval(() => {
-      loginCountdown.value -= 1;
-      if (loginCountdown.value <= 0 && loginTimer) {
-        window.clearInterval(loginTimer);
-        loginTimer = null;
-      }
-    }, 1000);
-    return;
-  }
-
-  if (resetTimer) {
-    window.clearInterval(resetTimer);
-  }
-  resetCountdown.value = seconds;
-  resetTimer = window.setInterval(() => {
-    resetCountdown.value -= 1;
-    if (resetCountdown.value <= 0 && resetTimer) {
-      window.clearInterval(resetTimer);
-      resetTimer = null;
-    }
-  }, 1000);
-}
-
-async function handleSendCode(scene: 'register' | 'reset_password' | 'login') {
-  const mobile = (
-    scene === 'register'
-      ? registerForm.mobile
-      : scene === 'login'
-        ? loginForm.account
-        : resetForm.mobile
-  ).trim();
-  if (!validateMobile(mobile)) {
-    mallStore.setFeedback('请输入正确的手机号');
-    return;
-  }
-
-  const result = await mallStore.sendSmsCode(mobile, scene);
-  if (!result.success) {
-    return;
-  }
-
-  startCountdown(scene);
+function validateEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 async function handleLogin() {
   const account = loginForm.account.trim();
 
   if (!account) {
-    mallStore.setFeedback(loginMethod.value === 'password' ? '请输入账号和密码' : '请输入已注册手机号');
+    mallStore.setFeedback('请输入已注册手机号');
     return;
   }
 
-  if (loginMethod.value === 'password') {
-    if (!loginForm.password) {
-      mallStore.setFeedback('请输入账号和密码');
-      return;
-    }
-
-    if (loginForm.password.length < 6) {
-      mallStore.setFeedback('密码至少 6 位');
-      return;
-    }
-  } else {
-    if (!validateMobile(account)) {
-      mallStore.setFeedback('请输入已注册手机号');
-      return;
-    }
-
-    if (!loginForm.smsCode.trim()) {
-      mallStore.setFeedback('请输入短信验证码');
-      return;
-    }
+  if (!validateMobile(account)) {
+    mallStore.setFeedback('请输入已注册手机号');
+    return;
   }
 
-  const result =
-    loginMethod.value === 'sms'
-      ? await mallStore.smsLogin({
-          mobile: account,
-          smsCode: loginForm.smsCode.trim()
-        })
-      : await mallStore.login({
-          role: 'user',
-          account,
-          password: loginForm.password
-        });
+  if (!loginForm.password) {
+    mallStore.setFeedback('请输入密码');
+    return;
+  }
+
+  if (loginForm.password.length < 6) {
+    mallStore.setFeedback('密码至少 6 位');
+    return;
+  }
+
+  const result = await mallStore.login({
+    role: 'user',
+    account,
+    password: loginForm.password
+  });
 
   if (result.success) {
     loginForm.password = '';
-    loginForm.smsCode = '';
     await homeStore.fetchHome();
   }
 }
@@ -613,6 +519,11 @@ async function handleLogin() {
 async function handleRegister() {
   if (!validateMobile(registerForm.mobile.trim())) {
     mallStore.setFeedback('请输入正确的手机号');
+    return;
+  }
+
+  if (!validateEmail(registerForm.email.trim())) {
+    mallStore.setFeedback('请输入正确的邮箱');
     return;
   }
 
@@ -633,8 +544,8 @@ async function handleRegister() {
 
   const result = await mallStore.register({
     mobile: registerForm.mobile.trim(),
+    email: registerForm.email.trim(),
     nickname: registerForm.nickname.trim(),
-    smsCode: registerForm.smsCode.trim() || undefined,
     password: registerForm.password,
     confirmPassword: registerForm.confirmPassword
   });
@@ -642,8 +553,8 @@ async function handleRegister() {
   if (result.success) {
     authView.value = 'login';
     registerForm.mobile = '';
+    registerForm.email = '';
     registerForm.nickname = '';
-    registerForm.smsCode = '';
     registerForm.password = '';
     registerForm.confirmPassword = '';
     await homeStore.fetchHome();
@@ -656,35 +567,43 @@ async function handleResetPassword() {
     return;
   }
 
-  if (!resetForm.smsCode.trim()) {
-    mallStore.setFeedback('请输入短信验证码');
-    return;
-  }
-
-  if (resetForm.password.length < 6) {
-    mallStore.setFeedback('新密码至少 6 位');
-    return;
-  }
-
-  if (resetForm.password !== resetForm.confirmPassword) {
-    mallStore.setFeedback('两次输入的新密码不一致');
+  if (!validateEmail(resetForm.email.trim())) {
+    mallStore.setFeedback('请输入正确的邮箱');
     return;
   }
 
   const result = await mallStore.resetPassword({
     mobile: resetForm.mobile.trim(),
-    smsCode: resetForm.smsCode.trim(),
-    password: resetForm.password,
-    confirmPassword: resetForm.confirmPassword
+    email: resetForm.email.trim()
   });
 
   if (result.success) {
     authView.value = 'login';
     resetForm.mobile = '';
-    resetForm.smsCode = '';
-    resetForm.password = '';
-    resetForm.confirmPassword = '';
+    resetForm.email = '';
     await homeStore.fetchHome();
+  }
+}
+
+async function handleSendMerchantMessage() {
+  if (merchantSubmitting.value) {
+    return;
+  }
+
+  const message = merchantDraft.value.trim();
+  if (!message) {
+    mallStore.setFeedback('请输入想发送给商家的内容');
+    return;
+  }
+
+  merchantSubmitting.value = true;
+  try {
+    const result = await mallStore.sendMerchantMessage(message);
+    if (result.success) {
+      merchantDraft.value = '';
+    }
+  } finally {
+    merchantSubmitting.value = false;
   }
 }
 
@@ -713,10 +632,10 @@ function handleLogout() {
           <p class="auth-copy">
             {{
               authView === 'login'
-                ? '会员账号支持密码登录、验证码登录、注册与密码重置。'
+                ? '会员账号使用手机号与密码登录，购物、下单、充值、优惠券和订单状态会实时同步。'
                 : authView === 'register'
-                  ? '注册时需要二次确认密码，注册成功后会自动登录到会员账号。'
-                  : '通过短信验证码验证身份后，可为会员账号重置登录密码。'
+                  ? '注册时填写手机号、邮箱、昵称和两次密码，注册成功后会自动进入会员商城。'
+                  : '填写注册手机号和邮箱后，系统会生成新的临时密码并发送到您的邮箱。'
             }}
           </p>
         </div>
@@ -725,39 +644,21 @@ function handleLogout() {
           {{ feedbackMessage }}
         </div>
 
-        <div v-if="authView === 'login'" class="auth-tabs">
-          <button
-            type="button"
-            class="auth-tab"
-            :class="{ active: loginMethod === 'password' }"
-            @click="loginMethod = 'password'"
-          >
-            密码登录
-          </button>
-          <button
-            type="button"
-            class="auth-tab"
-            :class="{ active: loginMethod === 'sms' }"
-            @click="loginMethod = 'sms'"
-          >
-            验证码登录
-          </button>
-        </div>
-
         <form
           v-if="authView === 'login'"
           class="auth-form"
           @submit.prevent="handleLogin"
         >
           <label class="field">
-            <span>{{ loginMethod === 'password' ? '手机号 / 账号' : '已注册手机号' }}</span>
+            <span>已注册手机号</span>
             <input
               :value="loginForm.account"
               type="text"
+              maxlength="11"
               @input="loginForm.account = ($event.target as HTMLInputElement).value"
             />
           </label>
-          <label v-if="loginMethod === 'password'" class="field">
+          <label class="field">
             <span>密码</span>
             <input
               :value="loginForm.password"
@@ -765,28 +666,7 @@ function handleLogout() {
               @input="loginForm.password = ($event.target as HTMLInputElement).value"
             />
           </label>
-          <label v-else class="field">
-            <span>短信验证码</span>
-            <div class="code-row">
-              <input
-                :value="loginForm.smsCode"
-                type="text"
-                maxlength="6"
-                @input="loginForm.smsCode = ($event.target as HTMLInputElement).value"
-              />
-              <button
-                type="button"
-                class="auth-tab"
-                :disabled="loginCountdown > 0"
-                @click="handleSendCode('login')"
-              >
-                {{ loginCountdown > 0 ? `${loginCountdown}s` : '发送验证码' }}
-              </button>
-            </div>
-          </label>
-          <button type="submit" class="primary-button wide">
-            {{ loginMethod === 'password' ? '进入会员商城' : '验证码登录' }}
-          </button>
+          <button type="submit" class="primary-button wide">进入会员商城</button>
           <button type="button" class="inline-link" @click="switchAuthView('reset')">
             忘记密码
           </button>
@@ -802,31 +682,20 @@ function handleLogout() {
             />
           </label>
           <label class="field">
+            <span>邮箱</span>
+            <input
+              :value="registerForm.email"
+              type="email"
+              @input="registerForm.email = ($event.target as HTMLInputElement).value"
+            />
+          </label>
+          <label class="field">
             <span>昵称</span>
             <input
               :value="registerForm.nickname"
               type="text"
               @input="registerForm.nickname = ($event.target as HTMLInputElement).value"
             />
-          </label>
-          <label class="field">
-            <span>短信验证码</span>
-            <div class="code-row">
-              <input
-                :value="registerForm.smsCode"
-                type="text"
-                maxlength="6"
-                @input="registerForm.smsCode = ($event.target as HTMLInputElement).value"
-              />
-              <button
-                type="button"
-                class="auth-tab"
-                :disabled="registerCountdown > 0"
-                @click="handleSendCode('register')"
-              >
-                {{ registerCountdown > 0 ? `${registerCountdown}s` : '发送验证码' }}
-              </button>
-            </div>
           </label>
           <label class="field">
             <span>密码</span>
@@ -858,38 +727,11 @@ function handleLogout() {
             />
           </label>
           <label class="field">
-            <span>短信验证码</span>
-            <div class="code-row">
-              <input
-                :value="resetForm.smsCode"
-                type="text"
-                maxlength="6"
-                @input="resetForm.smsCode = ($event.target as HTMLInputElement).value"
-              />
-              <button
-                type="button"
-                class="auth-tab"
-                :disabled="resetCountdown > 0"
-                @click="handleSendCode('reset_password')"
-              >
-                {{ resetCountdown > 0 ? `${resetCountdown}s` : '发送验证码' }}
-              </button>
-            </div>
-          </label>
-          <label class="field">
-            <span>新密码</span>
+            <span>注册邮箱</span>
             <input
-              :value="resetForm.password"
-              type="password"
-              @input="resetForm.password = ($event.target as HTMLInputElement).value"
-            />
-          </label>
-          <label class="field">
-            <span>确认新密码</span>
-            <input
-              :value="resetForm.confirmPassword"
-              type="password"
-              @input="resetForm.confirmPassword = ($event.target as HTMLInputElement).value"
+              :value="resetForm.email"
+              type="email"
+              @input="resetForm.email = ($event.target as HTMLInputElement).value"
             />
           </label>
           <button type="submit" class="primary-button wide">重置密码</button>
@@ -928,8 +770,8 @@ function handleLogout() {
           <p class="muted-text">{{ currentUserName }} 已登录</p>
         </div>
         <div class="header-actions">
-          <button type="button" class="message-button" @click="handleProfileAction('support')">
-            消息
+          <button type="button" class="message-button" @click="handleProfileAction('merchant')">
+            商家消息
             <span v-if="unreadMessages" class="count-badge">{{ unreadMessages }}</span>
           </button>
           <button type="button" class="ghost-button" @click="handleLogout">退出</button>
@@ -1339,7 +1181,7 @@ function handleLogout() {
 
           <div v-else-if="activePanel === 'support'" class="panel-content">
             <article class="info-card">
-              <strong>在线客服</strong>
+              <strong>AI客服</strong>
               <p>{{ supportReply }}</p>
             </article>
             <div class="support-chat">
@@ -1369,6 +1211,45 @@ function handleLogout() {
               @click="handleSendSupportMessage"
             >
               {{ supportSubmitting ? 'AI 正在回复...' : '发送给 AI 客服' }}
+            </button>
+          </div>
+
+          <div v-else-if="activePanel === 'merchant'" class="panel-content">
+            <article class="info-card">
+              <strong>联系商家</strong>
+              <p>{{ merchantReplyHint }}</p>
+            </article>
+            <div class="support-chat">
+              <article
+                v-for="message in merchantMessages"
+                :key="message.id"
+                :class="['chat-bubble', message.senderRole === 'admin' ? 'chat-assistant' : 'chat-user']"
+              >
+                <strong>{{ message.senderRole === 'admin' ? message.senderName : '我' }}</strong>
+                <p>{{ message.content }}</p>
+              </article>
+              <article v-if="!merchantMessages.length" class="info-card compact-card">
+                <strong>还没有商家消息</strong>
+                <p>可直接留言给后台管理员，管理员会在后台商家消息中心看到并回复。</p>
+              </article>
+            </div>
+            <label class="panel-field">
+              <span>留言给商家</span>
+              <textarea
+                :value="merchantDraft"
+                class="panel-textarea"
+                rows="3"
+                placeholder="例如：我想确认库存、发货时间或售后处理进度"
+                @input="merchantDraft = ($event.target as HTMLTextAreaElement).value"
+              />
+            </label>
+            <button
+              type="button"
+              class="member-button action-button"
+              :disabled="merchantSubmitting"
+              @click="handleSendMerchantMessage"
+            >
+              {{ merchantSubmitting ? '正在发送给商家...' : '发送给商家' }}
             </button>
           </div>
         </section>
