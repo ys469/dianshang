@@ -2,6 +2,10 @@ import type { AdminOrder, AdminProduct } from '../services/api';
 
 export type ProductStatusFilter = 'all' | 'listed' | 'unlisted' | 'low_stock';
 export type OrderStatusFilter = 'all' | 'pending' | 'pickup' | 'done';
+export type ShippingDraft = {
+  logisticsCompany: string;
+  trackingNo: string;
+};
 
 export function filterProducts(
   products: AdminProduct[],
@@ -115,4 +119,27 @@ export function getOrderActionLabel(order: AdminOrder) {
   }
 
   return '查看订单';
+}
+
+export function isShippingDraftReady(draft: ShippingDraft) {
+  return Boolean(draft.logisticsCompany.trim() && draft.trackingNo.trim());
+}
+
+export function getShippingDraftHint(draft: ShippingDraft) {
+  const hasLogisticsCompany = Boolean(draft.logisticsCompany.trim());
+  const hasTrackingNo = Boolean(draft.trackingNo.trim());
+
+  if (hasLogisticsCompany && hasTrackingNo) {
+    return '物流信息已填写完整，可以确认发货';
+  }
+
+  if (!hasLogisticsCompany && !hasTrackingNo) {
+    return '请先填写物流公司和运单号';
+  }
+
+  if (!hasLogisticsCompany) {
+    return '还差物流公司';
+  }
+
+  return '还差运单号';
 }

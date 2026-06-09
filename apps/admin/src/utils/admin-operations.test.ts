@@ -5,6 +5,8 @@ import {
   canShipOrder,
   filterOrders,
   filterProducts,
+  getShippingDraftHint,
+  isShippingDraftReady,
   getOrderActionLabel
 } from './admin-operations';
 
@@ -139,5 +141,59 @@ describe('admin operations helpers', () => {
     expect(canCompleteOrder(sampleOrders[1])).toBe(true);
     expect(getOrderActionLabel(sampleOrders[0])).toBe('发货');
     expect(getOrderActionLabel(sampleOrders[1])).toBe('完成订单');
+  });
+
+  it('requires complete logistics details before shipping can be submitted', () => {
+    expect(
+      isShippingDraftReady({
+        logisticsCompany: '',
+        trackingNo: ''
+      })
+    ).toBe(false);
+    expect(
+      isShippingDraftReady({
+        logisticsCompany: '顺丰速运',
+        trackingNo: ''
+      })
+    ).toBe(false);
+    expect(
+      isShippingDraftReady({
+        logisticsCompany: ' ',
+        trackingNo: 'SF1234567890'
+      })
+    ).toBe(false);
+    expect(
+      isShippingDraftReady({
+        logisticsCompany: '顺丰速运',
+        trackingNo: 'SF1234567890'
+      })
+    ).toBe(true);
+  });
+
+  it('provides a clear shipping helper hint for incomplete drafts', () => {
+    expect(
+      getShippingDraftHint({
+        logisticsCompany: '',
+        trackingNo: ''
+      })
+    ).toBe('请先填写物流公司和运单号');
+    expect(
+      getShippingDraftHint({
+        logisticsCompany: '顺丰速运',
+        trackingNo: ''
+      })
+    ).toBe('还差运单号');
+    expect(
+      getShippingDraftHint({
+        logisticsCompany: '',
+        trackingNo: 'SF1234567890'
+      })
+    ).toBe('还差物流公司');
+    expect(
+      getShippingDraftHint({
+        logisticsCompany: '顺丰速运',
+        trackingNo: 'SF1234567890'
+      })
+    ).toBe('物流信息已填写完整，可以确认发货');
   });
 });

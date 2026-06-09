@@ -311,6 +311,14 @@ function uniqueTags(tags: string[]) {
   return [...new Set(tags.filter(Boolean))];
 }
 
+function containsVisiblePlaceholder(value: string | null | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  return /[?？]{2,}/u.test(value);
+}
+
 function mapSeedStatus(status: string, fulfillmentMode: string) {
   if (status === 'pending_payment') {
     return '待付款';
@@ -335,6 +343,10 @@ function getRechargeBonus(amount: number) {
     return 10;
   }
   return 0;
+}
+
+function isReasonablePhoneNumber(value: string) {
+  return /^1[3-9]\d{9}$/u.test(value.trim());
 }
 
 @Injectable()
@@ -389,6 +401,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.hydrateState();
+    this.sanitizeRuntimeState();
+    this.recomputeMemberSummaries();
+    this.persistState();
   }
 
   async onModuleDestroy() {
@@ -2346,6 +2361,131 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       memberId: order.memberId,
       detail: `${order.customerName} 完成订单支付`
     }));
+  }
+
+  private sanitizeRuntimeState() {
+    const allowedProductIds = new Set<string>();
+
+    this.products = this.products.filter((product) => {
+      const shouldKeep =
+        !product.name.includes('测试') &&
+        !containsVisiblePlaceholder(product.name) &&
+        !containsVisiblePlaceholder(product.subtitle) &&
+        !containsVisiblePlaceholder(product.description) &&
+        product.price > 0 &&
+        product.price <= 100000 &&
+        product.memberPrice > 0 &&
+        product.memberPrice <= product.price &&
+        product.stock >= 0;
+
+      if (shouldKeep) {
+        allowedProductIds.add(product.id);
+      }
+
+      return shouldKeep;
+    });
+
+    const validOrders: OrderRecord[] = [];
+    const removedOrderNos = new Set<string>();
+
+    for (const order of this.orders) {
+      const validItems = order.items.filter(
+        (item) =>
+          allowedProductIds.has(item.productId) &&
+          !item.productName.includes('测试') &&
+          !item.productName.includes('特朗普') &&
+          !containsVisiblePlaceholder(item.productName) &&
+          item.quantity > 0 &&
+          item.price > 0 &&
+          item.price <= 100000 &&
+          item.memberPrice > 0 &&
+          item.memberPrice <= 100000
+      );
+
+      const shouldKeep =
+        validItems.length > 0 &&
+        !order.customerName.includes('测试') &&
+        !containsVisiblePlaceholder(order.customerName) &&
+        !containsVisiblePlaceholder(order.address) &&
+        !containsVisiblePlaceholder(order.customerMobile) &&
+        isReasonablePhoneNumber(order.customerMobile) &&
+        order.payableAmount > 0 &&
+        order.payableAmount <= 100000 &&
+        order.totalAmount > 0 &&
+        order.totalAmount <= 100000;
+
+      if (!shouldKeep) {
+        removedOrderNos.add(order.orderNo);
+        continue;
+      }
+
+      validOrders.push({
+        ...order,
+        items: validItems
+      });
+    }
+
+    this.orders = validOrders;
+
+    const activeMemberIds = new Set(this.orders.map((order) => order.memberId).filter(Boolean) as string[]);
+    const transactionOrderNos = new Set([
+      ...this.orders.map((order) => order.orderNo),
+      ...this.rechargeRecords.map((record) => record.rechargeNo)
+    ]);
+
+    this.members = this.members.filter((member) => {
+      const looksJunk =
+        member.nickname.includes('测试') ||
+        containsVisiblePlaceholder(member.nickname) ||
+        containsVisiblePlaceholder(member.defaultConsignee) ||
+        containsVisiblePlaceholder(member.defaultAddress) ||
+        !isReasonablePhoneNumber(member.mobile) ||
+        !isReasonablePhoneNumber(member.contactMobile);
+
+      if (looksJunk && !activeMemberIds.has(member.id)) {
+        return false;
+      }
+
+      return true;
+    });
+
+    this.transactions = this.transactions.filter((transaction) => {
+      if (removedOrderNos.has(transaction.orderNo)) {
+        return false;
+      }
+
+      if (transaction.amount > 100000 || transaction.amount < -100000) {
+        return false;
+      }
+
+      return transactionOrderNos.has(transaction.orderNo);
+    });
+  }
+
+  private recomputeMemberSummaries() {
+    for (const member of this.members) {
+      const paidOrders = this.orders
+        .filter((order) => order.memberId === member.id && order.paymentState === 'success')
+        .sort(
+          (left, right) =>
+            new Date(right.paidAt ?? right.createdAt).getTime() -
+            new Date(left.paidAt ?? left.createdAt).getTime()
+        );
+
+      member.totalOrders = paidOrders.length;
+      member.totalSpent = roundMoney(
+        paidOrders.reduce((sum, order) => sum + order.payableAmount, 0)
+      );
+      member.lastOrderAt = paidOrders[0]?.paidAt ?? paidOrders[0]?.createdAt ?? null;
+
+      if (!member.defaultConsignee || containsVisiblePlaceholder(member.defaultConsignee)) {
+        member.defaultConsignee = member.nickname;
+      }
+
+      if (!member.contactMobile || !isReasonablePhoneNumber(member.contactMobile)) {
+        member.contactMobile = member.mobile;
+      }
+    }
   }
 
   private findMember(authUserId?: string | null, mobile?: string | null) {

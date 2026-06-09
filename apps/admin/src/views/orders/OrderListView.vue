@@ -6,6 +6,8 @@ import {
   canCompleteOrder,
   canShipOrder,
   filterOrders,
+  getShippingDraftHint,
+  isShippingDraftReady,
   type OrderStatusFilter
 } from '../../utils/admin-operations';
 
@@ -114,10 +116,14 @@ function getDraft(orderNo: string) {
   return logisticsDrafts[orderNo];
 }
 
+function getShippingHint(orderNo: string) {
+  return getShippingDraftHint(getDraft(orderNo));
+}
+
 async function handleShip(order: AdminOrder) {
   const draft = getDraft(order.orderNo);
-  if (!draft.logisticsCompany.trim() || !draft.trackingNo.trim()) {
-    errorMsg.value = '发货前请填写物流公司和运单号。';
+  if (!isShippingDraftReady(draft)) {
+    errorMsg.value = getShippingDraftHint(draft);
     successMsg.value = '';
     return;
   }
@@ -270,25 +276,42 @@ function formatDateTime(value: string | null) {
 
         <div class="order-actions">
           <div v-if="canShipOrder(order)" class="shipping-form">
-            <input
-              v-model="getDraft(order.orderNo).logisticsCompany"
-              class="field"
-              type="text"
-              placeholder="物流公司"
-            />
-            <input
-              v-model="getDraft(order.orderNo).trackingNo"
-              class="field"
-              type="text"
-              placeholder="运单号"
-            />
-            <button
-              class="primary-btn"
-              :disabled="savingOrderNo === order.orderNo"
-              @click="handleShip(order)"
-            >
-              {{ savingOrderNo === order.orderNo ? '处理中...' : '确认发货' }}
-            </button>
+            <div class="shipping-panel">
+              <div class="shipping-panel-head">
+                <strong>发货信息</strong>
+                <span
+                  :class="[
+                    'shipping-hint',
+                    isShippingDraftReady(getDraft(order.orderNo)) ? 'ready' : 'pending'
+                  ]"
+                >
+                  {{ getShippingHint(order.orderNo) }}
+                </span>
+              </div>
+              <div class="shipping-fields">
+                <input
+                  v-model="getDraft(order.orderNo).logisticsCompany"
+                  class="field"
+                  type="text"
+                  placeholder="请输入物流公司，例如顺丰速运"
+                />
+                <input
+                  v-model="getDraft(order.orderNo).trackingNo"
+                  class="field"
+                  type="text"
+                  placeholder="请输入运单号"
+                />
+              </div>
+              <button
+                class="primary-btn"
+                :disabled="
+                  savingOrderNo === order.orderNo || !isShippingDraftReady(getDraft(order.orderNo))
+                "
+                @click="handleShip(order)"
+              >
+                {{ savingOrderNo === order.orderNo ? '处理中...' : '确认发货' }}
+              </button>
+            </div>
           </div>
 
           <div class="action-row">
@@ -570,14 +593,51 @@ function formatDateTime(value: string | null) {
 }
 
 .shipping-form {
+  display: block;
+}
+
+.shipping-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #e9d5ff;
+  background: #faf5ff;
+  border-radius: 10px;
+}
+
+.shipping-panel-head {
   display: flex;
-  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
-.shipping-form .field {
-  min-width: 180px;
-  flex: 1;
+.shipping-panel-head strong {
+  font-size: 14px;
+  color: #1f2937;
+}
+
+.shipping-hint {
+  font-size: 12px;
+}
+
+.shipping-hint.pending {
+  color: #b45309;
+}
+
+.shipping-hint.ready {
+  color: #047857;
+}
+
+.shipping-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.shipping-fields .field {
+  min-width: 0;
 }
 
 .action-row {
@@ -592,6 +652,10 @@ function formatDateTime(value: string | null) {
   }
 
   .order-body {
+    grid-template-columns: 1fr;
+  }
+
+  .shipping-fields {
     grid-template-columns: 1fr;
   }
 

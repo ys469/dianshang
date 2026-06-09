@@ -14,10 +14,12 @@ describe('/admin linked data', () => {
   let memberToken = '';
   const tempDir = join(tmpdir(), 'smart-member-mall-tests');
   const dbFile = join(tempDir, `linked-${Date.now()}.sqlite`);
+  const runtimeFile = join(tempDir, `linked-runtime-${Date.now()}.json`);
 
   beforeAll(async () => {
     mkdirSync(tempDir, { recursive: true });
     process.env.AUTH_DB_FILE = dbFile;
+    process.env.RUNTIME_DATA_FILE = runtimeFile;
     process.env.JWT_SECRET = 'linked-test-secret';
 
     const moduleRef = await Test.createTestingModule({
@@ -47,10 +49,15 @@ describe('/admin linked data', () => {
   afterAll(async () => {
     await app.close();
     delete process.env.AUTH_DB_FILE;
+    delete process.env.RUNTIME_DATA_FILE;
     delete process.env.JWT_SECRET;
 
     if (existsSync(dbFile)) {
       rmSync(dbFile, { force: true });
+    }
+
+    if (existsSync(runtimeFile)) {
+      rmSync(runtimeFile, { force: true });
     }
   });
 
