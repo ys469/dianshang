@@ -76,7 +76,7 @@ let registerTimer: ReturnType<typeof setInterval> | null = null;
 let resetTimer: ReturnType<typeof setInterval> | null = null;
 let loginTimer: ReturnType<typeof setInterval> | null = null;
 
-const { banners, categories, notice, sections } = storeToRefs(homeStore);
+const { banners, categories, hasLoaded, isLoading, notice, sections } = storeToRefs(homeStore);
   const {
     activePanel,
     cart,
@@ -265,6 +265,14 @@ const displaySections = computed(() =>
       )
     }))
     .filter((section) => section.products.length > 0)
+);
+
+const showHomeLoading = computed(
+  () => isLoading.value && !hasLoaded.value && sections.value.length === 0
+);
+
+const showEmptyCatalog = computed(
+  () => hasLoaded.value && !isLoading.value && displaySections.value.length === 0
 );
 
 const categorySummaries = computed(() =>
@@ -983,10 +991,23 @@ function handleLogout() {
             </div>
           </section>
 
-          <section v-if="!displaySections.length" class="section-block empty-state">
+          <section v-if="showHomeLoading" class="section-block empty-state loading-state">
+            <h2>商品与活动加载中</h2>
+            <p>正在同步商城商品、会员活动和优惠信息，请稍候片刻。</p>
+          </section>
+
+          <section v-else-if="showEmptyCatalog" class="section-block empty-state">
             <h2>没有找到匹配商品</h2>
             <p>换个关键词试试，或者清空当前搜索和分类条件。</p>
-            <button type="button" class="ghost-button" @click="mallStore.setCategory(null)">
+            <button
+              type="button"
+              class="ghost-button"
+              @click="
+                mallStore.setSearchDraft('');
+                mallStore.submitSearch();
+                mallStore.setCategory(null);
+              "
+            >
               清空筛选
             </button>
           </section>
@@ -2116,6 +2137,12 @@ p {
 .empty-state {
   display: grid;
   gap: 10px;
+}
+
+.loading-state {
+  min-height: 168px;
+  place-items: center;
+  text-align: center;
 }
 
 .empty-state.compact {
