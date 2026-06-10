@@ -2,7 +2,14 @@ import { Body, Controller, Get, HttpCode, Inject, Post, UseGuards } from '@nestj
 import { ok } from '../../common/api-response';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
-import { LoginDto, RegisterDto, ResetPasswordDto, SendSmsCodeDto, SmsLoginDto } from './auth.dto';
+import {
+  ChangePasswordDto,
+  LoginDto,
+  RegisterDto,
+  ResetPasswordDto,
+  SendSmsCodeDto,
+  SmsLoginDto
+} from './auth.dto';
 import { AuthService } from './auth.service';
 
 @Controller('auth')
@@ -36,6 +43,12 @@ export class AuthController {
   @HttpCode(200)
   async resetPassword(@Body() body: ResetPasswordDto) {
     return ok(await this.authService.resetPassword(body), 'password reset');
+  }
+
+  @Post('change-password')
+  @HttpCode(200)
+  async changePassword(@Body() body: ChangePasswordDto) {
+    return ok(await this.authService.changePassword(body), 'password changed');
   }
 
   @Get('me')

@@ -48,6 +48,21 @@ describe('production-facing copy', () => {
     expect(h5PreviewSource).not.toContain('验证码登录');
   });
 
+  it('offers a separate change-password flow with double confirmation on both member login surfaces', () => {
+    const mobileLoginSource = readFileSync(resolve(mobileRoot, 'src/pages/login/index.vue'), 'utf8');
+    const h5PreviewSource = readFileSync(resolve(mobileRoot, 'src/h5-preview/App.vue'), 'utf8');
+
+    expect(mobileLoginSource).toContain("switchMode('change')");
+    expect(mobileLoginSource).toContain('form.changeCurrentPassword');
+    expect(mobileLoginSource).toContain('form.changeNewPassword');
+    expect(mobileLoginSource).toContain('form.changeConfirmPassword');
+
+    expect(h5PreviewSource).toContain("switchAuthView('change')");
+    expect(h5PreviewSource).toContain('changeForm.currentPassword');
+    expect(h5PreviewSource).toContain('changeForm.newPassword');
+    expect(h5PreviewSource).toContain('changeForm.confirmPassword');
+  });
+
   it('keeps AI customer service and merchant contact as separate member actions', () => {
     const h5PreviewSource = readFileSync(resolve(mobileRoot, 'src/h5-preview/App.vue'), 'utf8');
 

@@ -136,6 +136,88 @@ describe('/auth', () => {
     expect(resetResponse.status).toBe(404);
   });
 
+  it('changes a member password when the current password is correct and confirmation matches', async () => {
+    const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
+      mobile: '13900000004',
+      email: 'change-member@example.com',
+      nickname: '修改密码会员',
+      password: 'before-change-123',
+      confirmPassword: 'before-change-123'
+    });
+
+    expect(registerResponse.status).toBe(201);
+
+    const changeResponse = await request(app.getHttpServer()).post('/auth/change-password').send({
+      mobile: '13900000004',
+      currentPassword: 'before-change-123',
+      newPassword: 'after-change-456',
+      confirmPassword: 'after-change-456'
+    });
+
+    expect(changeResponse.status).toBe(200);
+    expect(changeResponse.body.data.mobile).toBe('13900000004');
+
+    const oldPasswordLogin = await request(app.getHttpServer()).post('/auth/login').send({
+      role: 'user',
+      account: '13900000004',
+      password: 'before-change-123'
+    });
+
+    expect(oldPasswordLogin.status).toBe(401);
+
+    const newPasswordLogin = await request(app.getHttpServer()).post('/auth/login').send({
+      role: 'user',
+      account: '13900000004',
+      password: 'after-change-456'
+    });
+
+    expect(newPasswordLogin.status).toBe(200);
+    expect(newPasswordLogin.body.data.user.nickname).toBe('修改密码会员');
+  });
+
+  it('rejects password changes when the current password is incorrect', async () => {
+    const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
+      mobile: '13900000005',
+      email: 'change-wrong-current@example.com',
+      nickname: '当前密码错误会员',
+      password: 'before-change-123',
+      confirmPassword: 'before-change-123'
+    });
+
+    expect(registerResponse.status).toBe(201);
+
+    const changeResponse = await request(app.getHttpServer()).post('/auth/change-password').send({
+      mobile: '13900000005',
+      currentPassword: 'wrong-current-999',
+      newPassword: 'after-change-456',
+      confirmPassword: 'after-change-456'
+    });
+
+    expect(changeResponse.status).toBe(401);
+  });
+
+  it('rejects password changes when the new password confirmation does not match', async () => {
+    const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
+      mobile: '13900000006',
+      email: 'change-confirm@example.com',
+      nickname: '确认密码不一致会员',
+      password: 'before-change-123',
+      confirmPassword: 'before-change-123'
+    });
+
+    expect(registerResponse.status).toBe(201);
+
+    const changeResponse = await request(app.getHttpServer()).post('/auth/change-password').send({
+      mobile: '13900000006',
+      currentPassword: 'before-change-123',
+      newPassword: 'after-change-456',
+      confirmPassword: 'after-change-789'
+    });
+
+    expect(changeResponse.status).toBe(400);
+    expect(String(changeResponse.body.message ?? '')).toContain('密码');
+  });
+
   it('keeps admin and member permissions separated', async () => {
     const memberLogin = await request(app.getHttpServer()).post('/auth/login').send({
       role: 'user',

@@ -169,6 +169,11 @@ export interface PasswordResetPayload {
   debugPassword?: string;
 }
 
+export interface PasswordChangePayload {
+  mobile: string | null;
+  nickname: string;
+}
+
 export interface MerchantConversationPayload {
   threadId: string | null;
   memberId: string;
@@ -340,6 +345,18 @@ export const authClient = {
     return fetchJson<PasswordResetPayload>('/auth/reset-password', {
       method: 'POST',
       body: JSON.stringify({ mobile, email })
+    });
+  },
+
+  async changePassword(
+    mobile: string,
+    currentPassword: string,
+    newPassword: string,
+    confirmPassword: string
+  ): Promise<PasswordChangePayload> {
+    return fetchJson<PasswordChangePayload>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ mobile, currentPassword, newPassword, confirmPassword })
     });
   },
 

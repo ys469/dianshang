@@ -75,6 +75,15 @@ export const useAuthStore = defineStore('auth', {
       return authClient.resetPassword(mobile, email);
     },
 
+    async changePassword(
+      mobile: string,
+      currentPassword: string,
+      newPassword: string,
+      confirmPassword: string
+    ) {
+      return authClient.changePassword(mobile, currentPassword, newPassword, confirmPassword);
+    },
+
     async sendSmsCode(mobile: string, scene: SmsScene) {
       return authClient.sendSmsCode(mobile, scene);
     },

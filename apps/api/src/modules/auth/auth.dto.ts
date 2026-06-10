@@ -52,6 +52,23 @@ export class ResetPasswordDto {
   email!: string;
 }
 
+export class ChangePasswordDto {
+  @IsMobilePhone('zh-CN')
+  mobile!: string;
+
+  @IsString()
+  @MinLength(6)
+  currentPassword!: string;
+
+  @IsString()
+  @MinLength(6)
+  newPassword!: string;
+
+  @IsString()
+  @MinLength(6)
+  confirmPassword!: string;
+}
+
 export class SendSmsCodeDto {
   @IsMobilePhone('zh-CN')
   mobile!: string;

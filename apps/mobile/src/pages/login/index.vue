@@ -2,7 +2,7 @@
 import { reactive, ref } from 'vue';
 import { useAuthStore } from '../../stores/auth';
 
-type AuthMode = 'login' | 'register' | 'reset';
+type AuthMode = 'login' | 'register' | 'change' | 'reset';
 type MessageType = 'info' | 'success' | 'error';
 
 const authStore = useAuthStore();
@@ -18,6 +18,10 @@ const form = reactive({
   email: '',
   nickname: '',
   confirmPassword: '',
+  changeMobile: '',
+  changeCurrentPassword: '',
+  changeNewPassword: '',
+  changeConfirmPassword: '',
   resetMobile: '',
   resetEmail: ''
 });
@@ -121,6 +125,53 @@ async function handleRegister() {
   }
 }
 
+async function handleChangePassword() {
+  setMessage('info', '');
+
+  if (!validateMobile(form.changeMobile.trim())) {
+    setMessage('error', '请输入正确的手机号');
+    return;
+  }
+
+  if (form.changeCurrentPassword.length < 6) {
+    setMessage('error', '当前密码至少 6 位');
+    return;
+  }
+
+  if (form.changeNewPassword.length < 6) {
+    setMessage('error', '新密码至少 6 位');
+    return;
+  }
+
+  if (form.changeNewPassword !== form.changeConfirmPassword) {
+    setMessage('error', '两次输入的新密码不一致');
+    return;
+  }
+
+  submitting.value = true;
+  try {
+    await authStore.changePassword(
+      form.changeMobile.trim(),
+      form.changeCurrentPassword,
+      form.changeNewPassword,
+      form.changeConfirmPassword
+    );
+    form.account = form.changeMobile.trim();
+    form.password = '';
+    form.changeCurrentPassword = '';
+    form.changeNewPassword = '';
+    form.changeConfirmPassword = '';
+    form.changeMobile = '';
+    mode.value = 'login';
+    setMessage('success', '密码修改成功，请使用新密码登录');
+  } catch (error: unknown) {
+    const text = error instanceof Error ? error.message : '修改密码失败';
+    setMessage('error', text.includes('401') ? '手机号或当前密码错误' : text);
+  } finally {
+    submitting.value = false;
+  }
+}
+
 async function handleResetPassword() {
   setMessage('info', '');
 
@@ -136,12 +187,11 @@ async function handleResetPassword() {
 
   submitting.value = true;
   try {
-    const result = await authStore.resetPassword(
-      form.resetMobile.trim(),
-      form.resetEmail.trim()
-    );
+    const result = await authStore.resetPassword(form.resetMobile.trim(), form.resetEmail.trim());
     form.account = form.resetMobile.trim();
     form.password = '';
+    form.resetMobile = '';
+    form.resetEmail = '';
     mode.value = 'login';
     setMessage(
       'success',
@@ -170,7 +220,9 @@ async function handleResetPassword() {
               ? '会员登录'
               : mode === 'register'
                 ? '注册会员账号'
-                : '邮箱找回密码'
+                : mode === 'change'
+                  ? '修改会员密码'
+                  : '邮箱找回密码'
           }}
         </text>
       </view>
@@ -202,7 +254,10 @@ async function handleResetPassword() {
         <button class="submit-btn" :loading="submitting" :disabled="submitting" @tap="handleLogin">
           进入会员商城
         </button>
-        <button class="link-btn align-right" @tap="switchMode('reset')">忘记密码</button>
+        <view class="link-row">
+          <button class="link-btn" @tap="switchMode('reset')">忘记密码</button>
+          <button class="link-btn" @tap="switchMode('change')">修改密码</button>
+        </view>
       </view>
 
       <view v-else-if="mode === 'register'" class="form">
@@ -262,9 +317,57 @@ async function handleResetPassword() {
         </button>
       </view>
 
+      <view v-else-if="mode === 'change'" class="form">
+        <view class="form-item">
+          <text class="label">手机号</text>
+          <input
+            v-model="form.changeMobile"
+            class="input"
+            placeholder="请输入注册手机号"
+            type="number"
+            maxlength="11"
+          />
+        </view>
+        <view class="form-item">
+          <text class="label">当前密码</text>
+          <input
+            v-model="form.changeCurrentPassword"
+            class="input"
+            placeholder="请输入当前密码"
+            :password="true"
+          />
+        </view>
+        <view class="form-item">
+          <text class="label">新密码</text>
+          <input
+            v-model="form.changeNewPassword"
+            class="input"
+            placeholder="请输入新的登录密码"
+            :password="true"
+          />
+        </view>
+        <view class="form-item">
+          <text class="label">确认新密码</text>
+          <input
+            v-model="form.changeConfirmPassword"
+            class="input"
+            placeholder="请再次输入新密码"
+            :password="true"
+          />
+        </view>
+        <button
+          class="submit-btn"
+          :loading="submitting"
+          :disabled="submitting"
+          @tap="handleChangePassword"
+        >
+          确认修改密码
+        </button>
+      </view>
+
       <view v-else class="form">
         <view class="tip-box">
-          <text>填写注册手机号和邮箱后，系统会生成新的临时密码并发送到邮箱。</text>
+          <text>填写注册手机号和邮箱后，系统会生成新的临时密码并发送到您的邮箱。</text>
         </view>
         <view class="form-item">
           <text class="label">手机号</text>
@@ -449,6 +552,12 @@ async function handleResetPassword() {
   opacity: 0.72;
 }
 
+.link-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
 .auth-footer {
   margin-top: 28rpx;
   display: flex;
@@ -462,9 +571,5 @@ async function handleResetPassword() {
   color: #7c4dff;
   font-size: 26rpx;
   padding: 0;
-}
-
-.align-right {
-  align-self: flex-end;
 }
 </style>

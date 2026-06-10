@@ -5,6 +5,7 @@ import type { HomePayload, MemberProfile, OrderPayload } from '../services/api';
 
   const {
   cancelOrderMock,
+  changePasswordMock,
   claimDailyCheckInMock,
   createOrderMock,
   getCouponsMock,
@@ -90,6 +91,10 @@ import type { HomePayload, MemberProfile, OrderPayload } from '../services/api';
         mobile,
         memberLevel: 'Standard'
       }
+    })),
+    changePasswordMock: vi.fn(async (mobile: string) => ({
+      mobile,
+      nickname: 'Formal Member'
     })),
     sendSmsCodeMock: vi.fn(async () => ({
       mobile: '13900000001',
@@ -259,6 +264,7 @@ vi.mock('../services/api', async () => {
       login: loginMock,
       smsLogin: smsLoginMock,
       register: registerMock,
+      changePassword: changePasswordMock,
       sendSmsCode: sendSmsCodeMock
     },
     ordersClient: {
@@ -325,6 +331,7 @@ describe('demo mall store', () => {
     loginMock.mockClear();
     smsLoginMock.mockClear();
     registerMock.mockClear();
+    changePasswordMock.mockClear();
     sendSmsCodeMock.mockClear();
     getProfileMock.mockClear();
     getCouponsMock.mockClear();
@@ -796,6 +803,41 @@ describe('demo mall store', () => {
     expect(result.success).toBe(true);
     expect(sendSmsCodeMock).toHaveBeenCalledWith('13900000001', 'register');
     expect(store.feedbackMessage).toContain('123456');
+  });
+
+  it('changes the password when the current password is correct and confirmation matches', async () => {
+    const store = useDemoMallStore();
+
+    const result = await store.changePassword({
+      mobile: '13800138000',
+      currentPassword: 'member123',
+      newPassword: 'member456',
+      confirmPassword: 'member456'
+    });
+
+    expect(result.success).toBe(true);
+    expect(changePasswordMock).toHaveBeenCalledWith(
+      '13800138000',
+      'member123',
+      'member456',
+      'member456'
+    );
+    expect(store.feedbackMessage).toContain('密码');
+  });
+
+  it('blocks password changes when the two new-password entries do not match', async () => {
+    const store = useDemoMallStore();
+
+    const result = await store.changePassword({
+      mobile: '13800138000',
+      currentPassword: 'member123',
+      newPassword: 'member456',
+      confirmPassword: 'member789'
+    });
+
+    expect(result.success).toBe(false);
+    expect(changePasswordMock).not.toHaveBeenCalled();
+    expect(store.feedbackMessage).toContain('不一致');
   });
 
   it('drops stale admin sessions when restoring the public member app', async () => {

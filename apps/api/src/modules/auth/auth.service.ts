@@ -13,6 +13,7 @@ import { RuntimeDataService } from '../runtime-data/runtime-data.service';
 import { AuthDbService, type AuthUserRecord } from './auth-db.service';
 import { MailSenderService } from './mail-sender.service';
 import type {
+  ChangePasswordDto,
   LoginDto,
   RegisterDto,
   ResetPasswordDto,
@@ -157,6 +158,24 @@ export class AuthService {
       email,
       nickname: user.nickname,
       ...sendResult
+    };
+  }
+
+  async changePassword(dto: ChangePasswordDto) {
+    this.assertPasswordConfirmation(dto.newPassword, dto.confirmPassword);
+
+    const mobile = dto.mobile.trim();
+    const user = await this.authDbService.findByMobile(mobile);
+
+    if (!user || user.role !== 'user' || !verifyPassword(dto.currentPassword, user.passwordHash)) {
+      throw new UnauthorizedException('账号或当前密码错误');
+    }
+
+    await this.authDbService.updatePassword(user.id, hashPassword(dto.newPassword));
+
+    return {
+      mobile: user.mobile,
+      nickname: user.nickname
     };
   }
 

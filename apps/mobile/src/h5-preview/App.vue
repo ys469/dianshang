@@ -10,7 +10,7 @@ import {
 } from './store';
 
 type TabKey = 'home' | 'category' | 'cart' | 'profile';
-type AuthView = 'login' | 'register' | 'reset';
+type AuthView = 'login' | 'register' | 'reset' | 'change';
 
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'home', label: '首页' },
@@ -62,6 +62,13 @@ const registerForm = reactive({
 const resetForm = reactive({
   mobile: '',
   email: ''
+});
+
+const changeForm = reactive({
+  mobile: '',
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: ''
 });
 
 const { banners, categories, hasLoaded, isLoading, notice, sections } = storeToRefs(homeStore);
@@ -604,6 +611,45 @@ async function handleResetPassword() {
   }
 }
 
+async function handleChangePassword() {
+  if (!validateMobile(changeForm.mobile.trim())) {
+    mallStore.setFeedback('请输入正确的手机号');
+    return;
+  }
+
+  if (changeForm.currentPassword.length < 6) {
+    mallStore.setFeedback('当前密码至少 6 位');
+    return;
+  }
+
+  if (changeForm.newPassword.length < 6) {
+    mallStore.setFeedback('新密码至少 6 位');
+    return;
+  }
+
+  if (changeForm.newPassword !== changeForm.confirmPassword) {
+    mallStore.setFeedback('两次输入的新密码不一致');
+    return;
+  }
+
+  const result = await mallStore.changePassword({
+    mobile: changeForm.mobile.trim(),
+    currentPassword: changeForm.currentPassword,
+    newPassword: changeForm.newPassword,
+    confirmPassword: changeForm.confirmPassword
+  });
+
+  if (result.success) {
+    loginForm.account = changeForm.mobile.trim();
+    loginForm.password = '';
+    authView.value = 'login';
+    changeForm.mobile = '';
+    changeForm.currentPassword = '';
+    changeForm.newPassword = '';
+    changeForm.confirmPassword = '';
+  }
+}
+
 async function handleSendMerchantMessage() {
   if (merchantSubmitting.value) {
     return;
@@ -645,7 +691,9 @@ function handleLogout() {
                 ? '账号登录'
                 : authView === 'register'
                   ? '注册会员账号'
-                  : '找回会员密码'
+                  : authView === 'change'
+                    ? '修改会员密码'
+                    : '找回会员密码'
             }}
           </h1>
           <p class="auth-copy">
@@ -654,7 +702,9 @@ function handleLogout() {
                 ? '会员账号使用手机号与密码登录，购物、下单、充值、优惠券和订单状态会实时同步。'
                 : authView === 'register'
                   ? '注册时填写手机号、邮箱、昵称和两次密码，注册成功后会自动进入会员商城。'
-                  : '填写注册手机号和邮箱后，系统会生成新的临时密码并发送到您的邮箱。'
+                  : authView === 'change'
+                    ? '输入注册手机号、当前密码和两次新密码，校验通过后会立即更新为新的登录密码。'
+                    : '填写注册手机号和邮箱后，系统会生成新的临时密码并发送到您的邮箱。'
             }}
           </p>
         </div>
@@ -686,9 +736,14 @@ function handleLogout() {
             />
           </label>
           <button type="submit" class="primary-button wide">进入会员商城</button>
-          <button type="button" class="inline-link" @click="switchAuthView('reset')">
-            忘记密码
-          </button>
+          <div class="inline-link-row">
+            <button type="button" class="inline-link" @click="switchAuthView('reset')">
+              忘记密码
+            </button>
+            <button type="button" class="inline-link" @click="switchAuthView('change')">
+              修改密码
+            </button>
+          </div>
         </form>
         <form v-else-if="authView === 'register'" class="auth-form" @submit.prevent="handleRegister">
           <label class="field">
@@ -733,6 +788,42 @@ function handleLogout() {
             />
           </label>
           <button type="submit" class="primary-button wide">注册并进入会员商城</button>
+        </form>
+        <form v-else-if="authView === 'change'" class="auth-form" @submit.prevent="handleChangePassword">
+          <label class="field">
+            <span>手机号</span>
+            <input
+              :value="changeForm.mobile"
+              type="text"
+              maxlength="11"
+              @input="changeForm.mobile = ($event.target as HTMLInputElement).value"
+            />
+          </label>
+          <label class="field">
+            <span>当前密码</span>
+            <input
+              :value="changeForm.currentPassword"
+              type="password"
+              @input="changeForm.currentPassword = ($event.target as HTMLInputElement).value"
+            />
+          </label>
+          <label class="field">
+            <span>新密码</span>
+            <input
+              :value="changeForm.newPassword"
+              type="password"
+              @input="changeForm.newPassword = ($event.target as HTMLInputElement).value"
+            />
+          </label>
+          <label class="field">
+            <span>确认新密码</span>
+            <input
+              :value="changeForm.confirmPassword"
+              type="password"
+              @input="changeForm.confirmPassword = ($event.target as HTMLInputElement).value"
+            />
+          </label>
+          <button type="submit" class="primary-button wide">确认修改密码</button>
         </form>
 
         <form v-else class="auth-form" @submit.prevent="handleResetPassword">
@@ -1593,6 +1684,14 @@ p {
 .auth-switches {
   display: grid;
   gap: 10px;
+}
+
+.inline-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .auth-form,

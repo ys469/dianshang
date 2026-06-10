@@ -1,4 +1,4 @@
-import { defineStore } from 'pinia';
+﻿import { defineStore } from 'pinia';
 import {
   authClient,
   memberClient,
@@ -10,7 +10,6 @@ import {
   type MemberCouponPayload,
   type MemberProfile,
   type OrderPayload,
-  type PasswordResetPayload,
   type WechatRechargeSessionPayload
 } from '../services/api';
 import {
@@ -152,10 +151,17 @@ export interface ResetPasswordPayload {
   email: string;
 }
 
+export interface ChangePasswordPayload {
+  mobile: string;
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}
+
 export const adminShortcutDefinitions: AdminShortcutDefinition[] = [
   { key: 'products', label: '商品管理', description: '管理商品、库存与会员价' },
   { key: 'members', label: '会员管理', description: '查看会员等级、积分和成长值' },
-  { key: 'orders', label: '订单管理', description: '跟进待发货、待提货和售后订单' },
+  { key: 'orders', label: '订单管理', description: '跟进待发货、待收货和售后订单' },
   { key: 'marketing', label: '营销活动', description: '配置拼团、秒杀与优惠券' },
   { key: 'finance', label: '财务对账', description: '核对销售额、充值与资金流水' },
   { key: 'notifications', label: '消息通知', description: '查看订单、发货和系统通知' }
@@ -415,7 +421,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
     contactMobile: '',
     defaultAddress: '',
     supportMessages: [createSupportGreeting()] as SupportMessage[],
-    supportReply: '在线客服通常会在 5 分钟内响应。',
+    supportReply: 'AI 客服可协助查询订单、余额、积分、充值和优惠券问题。',
     merchantMessages: [] as MerchantMessage[],
     merchantReplyHint: '商家会在营业时段尽快回复，并可直接查看您的订单与联系方式。',
     orderSubmitting: false
@@ -579,13 +585,6 @@ export const useDemoMallStore = defineStore('demo-mall', {
         await this.syncMemberData().catch(() => undefined);
         this.feedbackMessage = '会员登录成功，欢迎回来';
         return createResult(true, this.feedbackMessage, result);
-
-        this.feedbackMessage = '\u4f1a\u5458\u767b\u5f55\u6210\u529f\uff0c\u6b22\u8fce\u56de\u6765';
-        this.feedbackMessage =
-          result.provider === 'mock' && result.debugPassword
-            ? `新密码已生成：${result.debugPassword}，请使用该密码登录后尽快修改。`
-            : '新的临时密码已发送到您的邮箱，请注意查收。';
-        return createResult(true, this.feedbackMessage, result as PasswordResetPayload);
       } catch (error) {
         this.isAuthenticated = false;
         this.currentRole = payload.role;
@@ -597,8 +596,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.activeAdminShortcut = null;
         removeStorageItem(TOKEN_KEY);
         removeStorageItem(USER_KEY);
-        this.feedbackMessage =
-          error instanceof Error ? error.message : '\u624b\u673a\u53f7\u6216\u5bc6\u7801\u9519\u8bef';
+        this.feedbackMessage = error instanceof Error ? error.message : '手机号或密码错误';
         return createResult(false, this.feedbackMessage);
       }
     },
@@ -661,10 +659,46 @@ export const useDemoMallStore = defineStore('demo-mall', {
             ? `新的临时密码：${result.debugPassword}，请登录后尽快修改。`
             : '新的临时密码已发送到您的邮箱，请注意查收。';
         return createResult(true, this.feedbackMessage, result);
-        this.feedbackMessage = '密码已重置，请使用新密码登录';
-        return createResult(true, this.feedbackMessage);
       } catch (error) {
         this.feedbackMessage = error instanceof Error ? error.message : '重置密码失败';
+        return createResult(false, this.feedbackMessage);
+      }
+    },
+
+    async changePassword(payload: ChangePasswordPayload) {
+      const mobile = payload.mobile.trim();
+      const currentPassword = payload.currentPassword.trim();
+      const newPassword = payload.newPassword.trim();
+      const confirmPassword = payload.confirmPassword.trim();
+
+      if (!isValidMobile(mobile)) {
+        this.feedbackMessage = '请输入正确的手机号';
+        return createResult(false, this.feedbackMessage);
+      }
+      if (currentPassword.length < 6) {
+        this.feedbackMessage = '当前密码至少 6 位';
+        return createResult(false, this.feedbackMessage);
+      }
+      if (newPassword.length < 6) {
+        this.feedbackMessage = '新密码至少 6 位';
+        return createResult(false, this.feedbackMessage);
+      }
+      if (newPassword !== confirmPassword) {
+        this.feedbackMessage = '两次输入的新密码不一致';
+        return createResult(false, this.feedbackMessage);
+      }
+
+      try {
+        const result = await authClient.changePassword(
+          mobile,
+          currentPassword,
+          newPassword,
+          confirmPassword
+        );
+        this.feedbackMessage = '密码修改成功，请使用新密码登录';
+        return createResult(true, this.feedbackMessage, result);
+      } catch (error) {
+        this.feedbackMessage = error instanceof Error ? error.message : '修改密码失败';
         return createResult(false, this.feedbackMessage);
       }
     },
@@ -675,14 +709,13 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.feedbackMessage =
           result.provider === 'mock' && result.debugCode
             ? `短信通道尚未配置真实发送，当前验证码：${result.debugCode}`
-            : '\u9a8c\u8bc1\u7801\u5df2\u53d1\u9001\uff0c\u8bf7\u6ce8\u610f\u67e5\u6536\u77ed\u4fe1';
+            : '验证码已发送，请注意查收短信';
         return {
           success: true,
           message: this.feedbackMessage
         };
       } catch (error) {
-        this.feedbackMessage =
-          error instanceof Error ? error.message : '\u9a8c\u8bc1\u7801\u53d1\u9001\u5931\u8d25';
+        this.feedbackMessage = error instanceof Error ? error.message : '验证码发送失败';
         return createResult(false, this.feedbackMessage);
       }
     },
@@ -865,7 +898,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
 
     async checkout(paymentMethod: 'balance' | 'wechat' = 'balance') {
       if (!this.cart.length) {
-        return createResult(false, '\u8d2d\u7269\u8f66\u8fd8\u662f\u7a7a\u7684\uff0c\u5148\u6311\u70b9\u559c\u6b22\u7684\u5546\u54c1\u5427');
+        return createResult(false, '购物车还是空的，先挑点喜欢的商品吧');
       }
 
       const items = this.cart.map((item) => ({ ...item }));
@@ -904,7 +937,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
         return createResult(false, this.feedbackMessage);
       }
       if (paymentMethod === 'balance' && this.walletBalance < payableAmount) {
-        this.feedbackMessage = '\u4f59\u989d\u4e0d\u8db3\uff0c\u8bf7\u5148\u5145\u503c\u540e\u518d\u63d0\u4ea4\u8ba2\u5355';
+        this.feedbackMessage = '余额不足，请先充值后再提交订单';
         return createResult(false, this.feedbackMessage);
       }
 
@@ -1003,7 +1036,7 @@ export const useDemoMallStore = defineStore('demo-mall', {
           this.memberCoupons = memberCoupons;
         }
 
-        this.feedbackMessage = '\u8ba2\u5355\u5df2\u64a4\u56de';
+        this.feedbackMessage = '订单已撤回';
         return createResult(true, this.feedbackMessage);
       } catch (error) {
         this.feedbackMessage =
@@ -1028,12 +1061,12 @@ export const useDemoMallStore = defineStore('demo-mall', {
         this.dailyCheckInClaimed = true;
         this.feedbackMessage =
           result.rewardCoupons > 0
-            ? `签到成功，已到账 ${result.rewardPoints} 积分，并发放 ${result.rewardCoupons} 张优惠券`
-            : `签到成功，已到账 ${result.rewardPoints} 积分`;
+            ? `绛惧埌鎴愬姛锛屽凡鍒拌处 ${result.rewardPoints} 绉垎锛屽苟鍙戞斁 ${result.rewardCoupons} 寮犱紭鎯犲埜`
+            : `绛惧埌鎴愬姛锛屽凡鍒拌处 ${result.rewardPoints} 绉垎`;
         return createResult(true, this.feedbackMessage, result);
       } catch (error) {
         this.feedbackMessage =
-          error instanceof Error ? error.message : '签到失败，请稍后重试';
+          error instanceof Error ? error.message : '绛惧埌澶辫触锛岃绋嶅悗閲嶈瘯';
         return createResult(false, this.feedbackMessage);
       }
     },
