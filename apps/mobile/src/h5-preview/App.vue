@@ -71,7 +71,7 @@ const changeForm = reactive({
   confirmPassword: ''
 });
 
-const { banners, categories, hasLoaded, isLoading, notice, sections } = storeToRefs(homeStore);
+const { categories, hasLoaded, isLoading, sections } = storeToRefs(homeStore);
   const {
     activePanel,
     cart,
@@ -907,20 +907,6 @@ function handleLogout() {
               </button>
             </form>
 
-            <div class="notice-row">
-              <span class="notice-tag">公告</span>
-              <span class="notice-text">{{ notice || '新人专享券与秒杀活动已上线' }}</span>
-            </div>
-
-            <div class="banner-strip">
-              <article v-for="banner in banners" :key="banner.id" class="banner-card">
-                <img :src="banner.image" :alt="banner.title" class="banner-image" />
-                <div class="banner-overlay">
-                  <p class="banner-title">{{ banner.title }}</p>
-                  <p class="banner-subtitle">会员价、拼团、限时折扣同步进行中</p>
-                </div>
-              </article>
-            </div>
           </section>
 
           <section class="section-block">

@@ -3,7 +3,7 @@ import { storeToRefs } from 'pinia';
 import { useHomeStore } from '../../stores/home';
 
 const homeStore = useHomeStore();
-const { banners, categories, notice, sections } = storeToRefs(homeStore);
+const { categories, sections } = storeToRefs(homeStore);
 
 void homeStore.fetchHome();
 </script>
@@ -12,16 +12,6 @@ void homeStore.fetchHome();
   <scroll-view scroll-y class="page">
     <view class="hero">
       <view class="search-box">搜索商品 / 品牌 / 活动</view>
-      <view class="notice-row">
-        <text class="notice-badge">公告</text>
-        <text class="notice-text">{{ notice }}</text>
-      </view>
-      <swiper class="banner-swiper" indicator-dots autoplay circular>
-        <swiper-item v-for="banner in banners" :key="banner.id">
-          <image class="banner-image" :src="banner.image" mode="aspectFill" />
-          <view class="banner-title">{{ banner.title }}</view>
-        </swiper-item>
-      </swiper>
     </view>
 
     <view class="card-grid category-grid">
