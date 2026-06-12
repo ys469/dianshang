@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ok } from '../../common/api-response';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
@@ -83,6 +83,29 @@ export class MemberController {
     }
   ) {
     return ok(this.runtimeDataService.getCouponsForMember(user?.sub ?? null, user?.mobile ?? null));
+  }
+
+  @Post('coupons/:couponId/claim')
+  claimCoupon(
+    @Param('couponId') couponId: string,
+    @CurrentUser()
+    user?: {
+      sub?: string;
+      mobile?: string | null;
+      nickname?: string;
+      memberLevel?: string | null;
+    }
+  ) {
+    return ok(
+      this.runtimeDataService.claimCouponForMember({
+        authUserId: user?.sub ?? null,
+        mobile: user?.mobile ?? null,
+        nickname: user?.nickname,
+        memberLevel: user?.memberLevel ?? null,
+        couponId
+      }),
+      'coupon claimed'
+    );
   }
 
   @Post('check-in')

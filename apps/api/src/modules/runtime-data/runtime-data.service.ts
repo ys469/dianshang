@@ -24,8 +24,28 @@ type PaymentMethod = 'balance' | 'wechat';
 type PaymentChannel = 'balance' | 'native' | 'h5';
 type PaymentState = 'pending' | 'success' | 'failed' | 'closed';
 type PricingSourceType = 'catalog' | 'flash_sale' | 'group_buying';
+type CouponIssueChannel =
+  | 'member_center'
+  | 'new_user'
+  | 'checkin'
+  | 'admin_grant'
+  | 'invite_reward'
+  | 'order_reward';
 const ORDER_CANCEL_WINDOW_MS = 3 * 60 * 1000;
 const RUNTIME_STATE_KEY = 'mall_state';
+
+const COUPON_ISSUE_CHANNEL_LABELS: Record<CouponIssueChannel, string> = {
+  member_center: '会员中心领取',
+  new_user: '新人注册自动发放',
+  checkin: '签到奖励',
+  admin_grant: '后台发放',
+  invite_reward: '邀请奖励',
+  order_reward: '下单返券'
+};
+
+const COUPON_ISSUE_CHANNELS = Object.keys(
+  COUPON_ISSUE_CHANNEL_LABELS
+) as CouponIssueChannel[];
 
 interface ProductRecord {
   id: string;
@@ -102,6 +122,14 @@ interface MemberRecord {
   checkinStreak: number;
 }
 
+interface MemberCouponWalletRecord {
+  memberId: string;
+  couponId: string;
+  remainingCount: number;
+  claimedCount: number;
+  updatedAt: string;
+}
+
 interface RechargeRecord {
   id: string;
   rechargeNo: string;
@@ -169,7 +197,18 @@ interface CouponRecord {
   total: number;
   status: string;
   enabled: boolean;
+  issueChannel: CouponIssueChannel;
+  claimable: boolean;
+  perUserLimit: number;
   createdAt: string;
+}
+
+interface CouponIssueInput {
+  member: MemberRecord;
+  coupon: CouponRecord;
+  count: number;
+  reason: string;
+  enforcePerUserLimit?: boolean;
 }
 
 interface FlashSaleRecord {
@@ -254,6 +293,7 @@ interface RuntimeState {
   checkinRules: CheckinRuleRecord[];
   orders: OrderRecord[];
   members: MemberRecord[];
+  memberCouponWallets: MemberCouponWalletRecord[];
   rechargeRecords: RechargeRecord[];
   transactions: TransactionRecord[];
   systemNotifications: NotificationRecord[];
@@ -372,6 +412,12 @@ function isReasonablePhoneNumber(value: string) {
   return /^1[3-9]\d{9}$/u.test(value.trim());
 }
 
+function normalizeCouponIssueChannel(value?: string | null): CouponIssueChannel {
+  return COUPON_ISSUE_CHANNELS.includes(value as CouponIssueChannel)
+    ? (value as CouponIssueChannel)
+    : 'member_center';
+}
+
 @Injectable()
 export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
   private readonly categories = seedCategories.map((item) => ({ ...item }));
@@ -399,6 +445,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
 
   private orders: OrderRecord[] = this.buildSeedOrders();
   private members: MemberRecord[] = this.buildSeedMembers();
+  private memberCouponWallets: MemberCouponWalletRecord[] = this.buildSeedMemberCouponWallets();
   private rechargeRecords: RechargeRecord[] = [];
   private transactions: TransactionRecord[] = this.buildSeedTransactions();
   private merchantThreads: MerchantThreadRecord[] = [];
@@ -977,12 +1024,14 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
 
-    if (member.coupons <= 0) {
+    const wallet = this.getMemberCouponWallet(member.id, couponId);
+
+    if (!wallet || wallet.remainingCount <= 0 || member.coupons <= 0) {
       throw new BadRequestException('\u5f53\u524d\u8d26\u6237\u6ca1\u6709\u53ef\u7528\u4f18\u60e0\u5238');
     }
 
     const coupon = this.coupons.find((item) => item.id === couponId);
-    if (!coupon || !coupon.enabled || coupon.used >= coupon.total) {
+    if (!coupon || !coupon.enabled) {
       throw new BadRequestException('\u8be5\u4f18\u60e0\u5238\u6682\u65f6\u4e0d\u53ef\u7528');
     }
 
@@ -993,6 +1042,135 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     }
 
     return coupon;
+  }
+
+  private getMemberCouponWallet(memberId: string, couponId: string) {
+    return (
+      this.memberCouponWallets.find(
+        (item) => item.memberId === memberId && item.couponId === couponId
+      ) ?? null
+    );
+  }
+
+  private getOrCreateMemberCouponWallet(memberId: string, couponId: string) {
+    const existing = this.getMemberCouponWallet(memberId, couponId);
+    if (existing) {
+      return existing;
+    }
+
+    const wallet: MemberCouponWalletRecord = {
+      memberId,
+      couponId,
+      remainingCount: 0,
+      claimedCount: 0,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.memberCouponWallets.push(wallet);
+    return wallet;
+  }
+
+  private getMemberCouponTotal(memberId: string) {
+    return this.memberCouponWallets
+      .filter((item) => item.memberId === memberId)
+      .reduce((sum, item) => sum + Math.max(0, item.remainingCount), 0);
+  }
+
+  private syncMemberCouponCount(member: MemberRecord) {
+    member.coupons = this.getMemberCouponTotal(member.id);
+  }
+
+  private issueCouponToMember(input: CouponIssueInput) {
+    const count = Math.max(0, Math.floor(input.count));
+    if (count <= 0) {
+      return 0;
+    }
+
+    if (!input.coupon.enabled || input.coupon.used >= input.coupon.total) {
+      return 0;
+    }
+
+    const wallet = this.getOrCreateMemberCouponWallet(input.member.id, input.coupon.id);
+    const remainingInventory = Math.max(0, input.coupon.total - input.coupon.used);
+    const limitLeft = input.enforcePerUserLimit
+      ? Math.max(0, input.coupon.perUserLimit - wallet.claimedCount)
+      : count;
+    const issuableCount = Math.min(count, remainingInventory, limitLeft);
+
+    if (issuableCount <= 0) {
+      return 0;
+    }
+
+    wallet.remainingCount += issuableCount;
+    wallet.claimedCount += issuableCount;
+    wallet.updatedAt = new Date().toISOString();
+    input.coupon.used += issuableCount;
+    this.syncMemberCouponCount(input.member);
+
+    this.transactions.unshift({
+      id: `tx-${Date.now()}-coupon-${input.coupon.id}`,
+      type: '发券',
+      orderNo: '--',
+      amount: issuableCount,
+      method: COUPON_ISSUE_CHANNEL_LABELS[input.coupon.issueChannel],
+      createdAt: wallet.updatedAt,
+      memberId: input.member.id,
+      detail: `${input.member.nickname} 获得 ${issuableCount} 张 ${input.coupon.title}（${input.reason}）`
+    });
+
+    return issuableCount;
+  }
+
+  private issueCouponsByChannel(
+    member: MemberRecord,
+    issueChannel: CouponIssueChannel,
+    reason: string,
+    countPerCoupon = 1,
+    enforcePerUserLimit = true
+  ) {
+    return this.coupons
+      .filter(
+        (coupon) =>
+          coupon.issueChannel === issueChannel &&
+          coupon.enabled &&
+          coupon.used < coupon.total &&
+          (coupon.claimable || issueChannel !== 'member_center')
+      )
+      .reduce(
+        (sum, coupon) =>
+          sum +
+          this.issueCouponToMember({
+            member,
+            coupon,
+            count: countPerCoupon,
+            reason,
+            enforcePerUserLimit
+          }),
+        0
+      );
+  }
+
+  private consumeMemberCoupon(member: MemberRecord, coupon: CouponRecord) {
+    const wallet = this.getMemberCouponWallet(member.id, coupon.id);
+    if (!wallet || wallet.remainingCount <= 0) {
+      throw new BadRequestException('当前账户没有该优惠券可用次数');
+    }
+
+    wallet.remainingCount -= 1;
+    wallet.updatedAt = new Date().toISOString();
+    this.syncMemberCouponCount(member);
+  }
+
+  private restoreMemberCoupon(member: MemberRecord, couponId: string) {
+    const coupon = this.coupons.find((item) => item.id === couponId);
+    if (!coupon) {
+      return;
+    }
+
+    const wallet = this.getOrCreateMemberCouponWallet(member.id, couponId);
+    wallet.remainingCount += 1;
+    wallet.updatedAt = new Date().toISOString();
+    this.syncMemberCouponCount(member);
   }
 
   createOrder(input: CreateOrderInput) {
@@ -1089,8 +1267,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     };
 
     if (appliedCoupon) {
-      appliedCoupon.used += 1;
-      member.coupons = Math.max(0, member.coupons - 1);
+      this.consumeMemberCoupon(member, appliedCoupon);
     }
 
     this.orders.unshift(order);
@@ -1256,12 +1433,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
           mobile: order.customerMobile,
           memberLevel: '普通会员'
         });
-      const coupon = this.coupons.find((item) => item.id === order.couponId);
-
-      member.coupons += 1;
-      if (coupon) {
-        coupon.used = Math.max(0, coupon.used - 1);
-      }
+      this.restoreMemberCoupon(member, order.couponId);
     }
 
     order.paymentState = 'closed';
@@ -1361,6 +1533,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     member.points += Math.floor(order.payableAmount / 10);
     member.growthValue += Math.floor(order.payableAmount);
     member.lastOrderAt = input.paidAt ?? new Date().toISOString();
+    this.issueCouponsByChannel(member, 'order_reward', '订单支付返券', 1, true);
 
     if (order.fulfillmentMode === 'delivery') {
       member.defaultConsignee = order.customerName;
@@ -1414,19 +1587,34 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
 
   getCouponsForMember(authUserId?: string | null, mobile?: string | null) {
     const member = this.findMember(authUserId ?? null, mobile ?? null);
-    const remainingCount = member?.coupons ?? 0;
 
     return this.coupons
       .filter((coupon) => coupon.enabled && coupon.used < coupon.total)
-      .map((coupon) => ({
-        id: coupon.id,
-        title: coupon.title,
-        threshold: coupon.threshold,
-        discount: coupon.discount,
-        status: coupon.status,
-        enabled: coupon.enabled,
-        remainingCount
-      }));
+      .map((coupon) => {
+        const wallet = member ? this.getMemberCouponWallet(member.id, coupon.id) : null;
+        const remainingCount = wallet?.remainingCount ?? 0;
+        const claimedCount = wallet?.claimedCount ?? 0;
+        const canClaim =
+          coupon.issueChannel === 'member_center' &&
+          coupon.claimable &&
+          claimedCount < coupon.perUserLimit;
+
+        return {
+          id: coupon.id,
+          title: coupon.title,
+          threshold: coupon.threshold,
+          discount: coupon.discount,
+          status: coupon.status,
+          enabled: coupon.enabled,
+          remainingCount,
+          claimedCount,
+          issueChannel: coupon.issueChannel,
+          issueChannelLabel: COUPON_ISSUE_CHANNEL_LABELS[coupon.issueChannel],
+          claimable: coupon.claimable,
+          perUserLimit: coupon.perUserLimit,
+          canClaim
+        };
+      });
   }
 
   getAdminOrders() {
@@ -1495,7 +1683,36 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       if (nextCoupons < 0) {
         throw new BadRequestException('优惠券数量不能小于 0');
       }
-      member.coupons = nextCoupons;
+
+      const adminCoupon =
+        this.coupons.find((coupon) => coupon.issueChannel === 'admin_grant' && coupon.enabled) ??
+        this.coupons.find((coupon) => coupon.enabled);
+
+      if (input.couponsDelta > 0 && adminCoupon) {
+        this.issueCouponToMember({
+          member,
+          coupon: adminCoupon,
+          count: input.couponsDelta,
+          reason: '后台会员管理发放',
+          enforcePerUserLimit: false
+        });
+      } else if (input.couponsDelta < 0) {
+        let remainingToDeduct = Math.abs(input.couponsDelta);
+        for (const wallet of this.memberCouponWallets.filter(
+          (item) => item.memberId === member.id && item.remainingCount > 0
+        )) {
+          const deducted = Math.min(wallet.remainingCount, remainingToDeduct);
+          wallet.remainingCount -= deducted;
+          wallet.updatedAt = new Date().toISOString();
+          remainingToDeduct -= deducted;
+          if (remainingToDeduct <= 0) {
+            break;
+          }
+        }
+        this.syncMemberCouponCount(member);
+      } else {
+        this.syncMemberCouponCount(member);
+      }
     }
 
     this.persistState();
@@ -1595,10 +1812,12 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
 
     const rewardText = matchedRule?.reward ?? '5 积分';
     const rewardPoints = Number((rewardText.match(/(\d+)\s*积分/u)?.[1] ?? '5'));
-    const rewardCoupons = rewardText.includes('优惠券') ? 1 : 0;
+    const rewardCoupons = rewardText.includes('优惠券')
+      ? this.issueCouponsByChannel(member, 'checkin', '签到奖励', 1, true)
+      : 0;
 
     member.points += rewardPoints;
-    member.coupons += rewardCoupons;
+    this.syncMemberCouponCount(member);
     member.lastCheckInAt = new Date().toISOString();
     member.checkinStreak = nextStreak;
 
@@ -2037,10 +2256,21 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
   }
 
   getCoupons() {
-    return this.coupons.map((item) => ({ ...item }));
+    return this.coupons.map((item) => ({
+      ...item,
+      issueChannelLabel: COUPON_ISSUE_CHANNEL_LABELS[item.issueChannel]
+    }));
   }
 
-  createCoupon(input: { title: string; threshold: number; discount: number; total: number }) {
+  createCoupon(input: {
+    title: string;
+    threshold: number;
+    discount: number;
+    total: number;
+    issueChannel?: string;
+    claimable?: boolean;
+    perUserLimit?: number;
+  }) {
     if (!input.title.trim()) {
       throw new BadRequestException('优惠券名称不能为空');
     }
@@ -2054,17 +2284,32 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       total: Math.max(1, Math.floor(input.total)),
       status: '进行中',
       enabled: true,
+      issueChannel: normalizeCouponIssueChannel(input.issueChannel),
+      claimable: input.claimable ?? true,
+      perUserLimit: Math.max(1, Math.floor(input.perUserLimit ?? 1)),
       createdAt: new Date().toISOString()
     };
 
     this.coupons.unshift(coupon);
     this.persistState();
-    return { ...coupon };
+    return {
+      ...coupon,
+      issueChannelLabel: COUPON_ISSUE_CHANNEL_LABELS[coupon.issueChannel]
+    };
   }
 
   updateCoupon(
     couponId: string,
-    input: { enabled?: boolean; title?: string; threshold?: number; discount?: number; total?: number }
+    input: {
+      enabled?: boolean;
+      title?: string;
+      threshold?: number;
+      discount?: number;
+      total?: number;
+      issueChannel?: string;
+      claimable?: boolean;
+      perUserLimit?: number;
+    }
   ) {
     const coupon = this.coupons.find((item) => item.id === couponId);
     if (!coupon) {
@@ -2086,17 +2331,73 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     if (input.enabled !== undefined) {
       coupon.enabled = input.enabled;
     }
+    if (input.issueChannel !== undefined) {
+      coupon.issueChannel = normalizeCouponIssueChannel(input.issueChannel);
+    }
+    if (input.claimable !== undefined) {
+      coupon.claimable = input.claimable;
+    }
+    if (input.perUserLimit !== undefined) {
+      coupon.perUserLimit = Math.max(1, Math.floor(input.perUserLimit));
+    }
 
     coupon.status = coupon.enabled ? '进行中' : '已暂停';
     this.persistState();
-    return { ...coupon };
+    return {
+      ...coupon,
+      issueChannelLabel: COUPON_ISSUE_CHANNEL_LABELS[coupon.issueChannel]
+    };
+  }
+
+  claimCouponForMember(input: {
+    authUserId?: string | null;
+    mobile?: string | null;
+    nickname?: string;
+    memberLevel?: string | null;
+    couponId: string;
+  }) {
+    const member =
+      this.findMember(input.authUserId ?? null, input.mobile ?? null) ??
+      this.ensureMemberProfile({
+        authUserId: input.authUserId ?? null,
+        mobile: input.mobile ?? '',
+        nickname: input.nickname ?? '商城会员',
+        memberLevel: input.memberLevel ?? '普通会员'
+      });
+    const coupon = this.coupons.find((item) => item.id === input.couponId);
+
+    if (
+      !coupon ||
+      !coupon.enabled ||
+      !coupon.claimable ||
+      coupon.issueChannel !== 'member_center'
+    ) {
+      throw new BadRequestException('该优惠券暂不支持会员自主领取');
+    }
+
+    const issuedCount = this.issueCouponToMember({
+      member,
+      coupon,
+      count: 1,
+      reason: '会员中心领取',
+      enforcePerUserLimit: true
+    });
+
+    if (issuedCount <= 0) {
+      throw new BadRequestException('该优惠券已达到领取上限或库存不足');
+    }
+
+    this.persistState();
+    return this.getCouponsForMember(member.authUserId, member.mobile);
   }
 
   getFlashSales() {
     return this.flashSales.map((item) => ({
       ...item,
       productName:
-        this.products.find((product) => product.id === item.productId)?.name ?? item.productId
+        this.products.find((product) => product.id === item.productId)?.name ?? item.productId,
+      productListed:
+        this.products.find((product) => product.id === item.productId)?.listed ?? false
     }));
   }
 
@@ -2128,19 +2429,28 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     this.persistState();
     return {
       ...flashSale,
-      productName: product.name
+      productName: product.name,
+      productListed: product.listed
     };
   }
 
   updateFlashSale(
     flashSaleId: string,
-    input: { enabled?: boolean; title?: string; price?: number; stock?: number }
+    input: { enabled?: boolean; title?: string; productId?: string; price?: number; stock?: number }
   ) {
     const flashSale = this.flashSales.find((item) => item.id === flashSaleId);
     if (!flashSale) {
       throw new NotFoundException('秒杀活动不存在');
     }
 
+    if (input.productId !== undefined && input.productId !== flashSale.productId) {
+      const product = this.products.find((item) => item.id === input.productId);
+      if (!product) {
+        throw new NotFoundException('秒杀商品不存在');
+      }
+      flashSale.productId = product.id;
+      flashSale.sold = 0;
+    }
     if (input.title?.trim()) {
       flashSale.title = input.title.trim();
     }
@@ -2169,7 +2479,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       ...flashSale,
       productName:
         this.products.find((product) => product.id === flashSale.productId)?.name ??
-        flashSale.productId
+        flashSale.productId,
+      productListed:
+        this.products.find((product) => product.id === flashSale.productId)?.listed ?? false
     };
   }
 
@@ -2177,7 +2489,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     return this.groupBuys.map((item) => ({
       ...item,
       productName:
-        this.products.find((product) => product.id === item.productId)?.name ?? item.productId
+        this.products.find((product) => product.id === item.productId)?.name ?? item.productId,
+      productListed:
+        this.products.find((product) => product.id === item.productId)?.listed ?? false
     }));
   }
 
@@ -2209,19 +2523,28 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     this.persistState();
     return {
       ...groupBuy,
-      productName: product.name
+      productName: product.name,
+      productListed: product.listed
     };
   }
 
   updateGroupBuy(
     groupBuyId: string,
-    input: { enabled?: boolean; title?: string; price?: number; groupSize?: number }
+    input: { enabled?: boolean; title?: string; productId?: string; price?: number; groupSize?: number }
   ) {
     const groupBuy = this.groupBuys.find((item) => item.id === groupBuyId);
     if (!groupBuy) {
       throw new NotFoundException('拼团活动不存在');
     }
 
+    if (input.productId !== undefined && input.productId !== groupBuy.productId) {
+      const product = this.products.find((item) => item.id === input.productId);
+      if (!product) {
+        throw new NotFoundException('拼团商品不存在');
+      }
+      groupBuy.productId = product.id;
+      groupBuy.completed = 0;
+    }
     if (input.title?.trim()) {
       groupBuy.title = input.title.trim();
     }
@@ -2245,7 +2568,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       ...groupBuy,
       productName:
         this.products.find((product) => product.id === groupBuy.productId)?.name ??
-        groupBuy.productId
+        groupBuy.productId,
+      productListed:
+        this.products.find((product) => product.id === groupBuy.productId)?.listed ?? false
     };
   }
 
@@ -2377,6 +2702,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     };
 
     this.members.unshift(member);
+    this.issueCouponsByChannel(member, 'new_user', '新人注册自动发放', 1, true);
     this.persistState();
     return member;
   }
@@ -2447,8 +2773,32 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       total: [500, 200][index] ?? 300,
       status: '进行中',
       enabled: true,
+      issueChannel: (index === 0 ? 'member_center' : 'new_user') as CouponIssueChannel,
+      claimable: index === 0,
+      perUserLimit: index === 0 ? 2 : 1,
       createdAt: createIso(index + 2)
     }));
+  }
+
+  private buildSeedMemberCouponWallets() {
+    return this.members.flatMap((member) => {
+      let remaining = member.coupons;
+      return this.coupons
+        .map((coupon) => {
+          const count = Math.min(remaining, Math.max(1, coupon.perUserLimit));
+          remaining -= count;
+          return count > 0
+            ? {
+                memberId: member.id,
+                couponId: coupon.id,
+                remainingCount: count,
+                claimedCount: count,
+                updatedAt: createIso(1)
+              }
+            : null;
+        })
+        .filter(Boolean) as MemberCouponWalletRecord[];
+    });
   }
 
   private buildSeedFlashSales() {
@@ -2727,6 +3077,81 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       if (!member.contactMobile || !isReasonablePhoneNumber(member.contactMobile)) {
         member.contactMobile = member.mobile;
       }
+
+      this.syncMemberCouponCount(member);
+    }
+  }
+
+  private normalizeCouponRecord(coupon: CouponRecord, index = 0): CouponRecord {
+    return {
+      ...coupon,
+      used: Math.max(0, Math.floor(coupon.used ?? 0)),
+      total: Math.max(1, Math.floor(coupon.total ?? 1)),
+      status: coupon.enabled === false ? '已暂停' : (coupon.status ?? '进行中'),
+      enabled: coupon.enabled ?? coupon.status !== '已暂停',
+      issueChannel: normalizeCouponIssueChannel(coupon.issueChannel),
+      claimable:
+        coupon.claimable ??
+        (normalizeCouponIssueChannel(coupon.issueChannel) === 'member_center'),
+      perUserLimit: Math.max(1, Math.floor(coupon.perUserLimit ?? (index === 0 ? 2 : 1))),
+      createdAt: coupon.createdAt ?? new Date().toISOString()
+    };
+  }
+
+  private normalizeMemberCouponWallets(parsedWallets?: MemberCouponWalletRecord[]) {
+    const normalized = (parsedWallets ?? [])
+      .filter(
+        (wallet) =>
+          wallet.memberId &&
+          wallet.couponId &&
+          this.members.some((member) => member.id === wallet.memberId) &&
+          this.coupons.some((coupon) => coupon.id === wallet.couponId)
+      )
+      .map((wallet) => ({
+        memberId: wallet.memberId,
+        couponId: wallet.couponId,
+        remainingCount: Math.max(0, Math.floor(wallet.remainingCount ?? 0)),
+        claimedCount: Math.max(
+          Math.floor(wallet.claimedCount ?? wallet.remainingCount ?? 0),
+          Math.floor(wallet.remainingCount ?? 0)
+        ),
+        updatedAt: wallet.updatedAt ?? new Date().toISOString()
+      }));
+
+    const walletKeys = new Set(normalized.map((item) => `${item.memberId}:${item.couponId}`));
+
+    for (const member of this.members) {
+      const existingTotal = normalized
+        .filter((wallet) => wallet.memberId === member.id)
+        .reduce((sum, wallet) => sum + wallet.remainingCount, 0);
+      let missingCount = Math.max(0, Math.floor((member.coupons ?? 0) - existingTotal));
+
+      for (const coupon of this.coupons) {
+        if (missingCount <= 0) {
+          break;
+        }
+
+        const key = `${member.id}:${coupon.id}`;
+        if (walletKeys.has(key)) {
+          continue;
+        }
+
+        const count = Math.min(missingCount, coupon.perUserLimit);
+        normalized.push({
+          memberId: member.id,
+          couponId: coupon.id,
+          remainingCount: count,
+          claimedCount: count,
+          updatedAt: new Date().toISOString()
+        });
+        walletKeys.add(key);
+        missingCount -= count;
+      }
+    }
+
+    this.memberCouponWallets = normalized;
+    for (const member of this.members) {
+      this.syncMemberCouponCount(member);
     }
   }
 
@@ -2826,10 +3251,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (parsed.coupons) {
-        this.coupons = parsed.coupons.map((item) => ({
-          ...item,
-          enabled: item.enabled ?? item.status !== '已暂停'
-        }));
+        this.coupons = parsed.coupons.map((item, index) =>
+          this.normalizeCouponRecord(item, index)
+        );
       }
 
       if (parsed.flashSales) {
@@ -2870,6 +3294,8 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       if (parsed.members) {
         this.members = parsed.members.map((item) => ({ ...item }));
       }
+
+      this.normalizeMemberCouponWallets(parsed.memberCouponWallets);
 
       if (parsed.rechargeRecords) {
         this.rechargeRecords = parsed.rechargeRecords.map((item) => ({ ...item }));
@@ -2927,6 +3353,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       checkinRules: this.checkinRules,
       orders: this.orders,
       members: this.members,
+      memberCouponWallets: this.memberCouponWallets,
       rechargeRecords: this.rechargeRecords,
       transactions: this.transactions,
       systemNotifications: this.systemNotifications,
@@ -3004,10 +3431,9 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (parsed.coupons) {
-      this.coupons = parsed.coupons.map((item) => ({
-        ...item,
-        enabled: item.enabled ?? item.status !== '宸叉殏鍋?'
-      }));
+      this.coupons = parsed.coupons.map((item, index) =>
+        this.normalizeCouponRecord(item, index)
+      );
     }
 
     if (parsed.flashSales) {
@@ -3049,6 +3475,8 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       this.members = parsed.members.map((item) => ({ ...item }));
     }
 
+    this.normalizeMemberCouponWallets(parsed.memberCouponWallets);
+
     if (parsed.rechargeRecords) {
       this.rechargeRecords = parsed.rechargeRecords.map((item) => ({ ...item }));
     }
@@ -3084,6 +3512,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
       checkinRules: this.checkinRules,
       orders: this.orders,
       members: this.members,
+      memberCouponWallets: this.memberCouponWallets,
       rechargeRecords: this.rechargeRecords,
       transactions: this.transactions,
       systemNotifications: this.systemNotifications,
@@ -3187,6 +3616,7 @@ export class RuntimeDataService implements OnModuleInit, OnModuleDestroy {
   }
 
   private toAdminMember(member: MemberRecord) {
+    this.syncMemberCouponCount(member);
     return {
       id: member.id,
       nickname: member.nickname,

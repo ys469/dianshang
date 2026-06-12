@@ -18,7 +18,15 @@ export class MarketingController {
   @Post('coupons')
   createCoupon(
     @Body()
-    body: { title: string; threshold: number; discount: number; total: number }
+    body: {
+      title: string;
+      threshold: number;
+      discount: number;
+      total: number;
+      issueChannel?: string;
+      claimable?: boolean;
+      perUserLimit?: number;
+    }
   ) {
     return ok(this.runtimeDataService.createCoupon(body), 'coupon created');
   }
@@ -33,6 +41,9 @@ export class MarketingController {
       discount?: number;
       total?: number;
       enabled?: boolean;
+      issueChannel?: string;
+      claimable?: boolean;
+      perUserLimit?: number;
     }
   ) {
     return ok(this.runtimeDataService.updateCoupon(id, body), 'coupon updated');
@@ -57,6 +68,7 @@ export class MarketingController {
     @Body()
     body: {
       title?: string;
+      productId?: string;
       price?: number;
       stock?: number;
       enabled?: boolean;
@@ -84,6 +96,7 @@ export class MarketingController {
     @Body()
     body: {
       title?: string;
+      productId?: string;
       price?: number;
       groupSize?: number;
       enabled?: boolean;

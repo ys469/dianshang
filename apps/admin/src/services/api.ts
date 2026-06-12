@@ -145,6 +145,10 @@ export interface CouponItem {
   total: number;
   status: string;
   enabled: boolean;
+  issueChannel: string;
+  issueChannelLabel: string;
+  claimable: boolean;
+  perUserLimit: number;
   createdAt: string;
 }
 
@@ -158,6 +162,7 @@ export interface FlashSaleItem {
   sold: number;
   status: string;
   enabled: boolean;
+  productListed: boolean;
   createdAt: string;
 }
 
@@ -171,6 +176,7 @@ export interface GroupBuyItem {
   completed: number;
   status: string;
   enabled: boolean;
+  productListed: boolean;
   createdAt: string;
 }
 
@@ -412,6 +418,9 @@ export const apiClient = {
     threshold: number;
     discount: number;
     total: number;
+    issueChannel?: string;
+    claimable?: boolean;
+    perUserLimit?: number;
   }) {
     return fetchJson<CouponItem>('/admin/marketing/coupons', {
       method: 'POST',
@@ -427,6 +436,9 @@ export const apiClient = {
       discount?: number;
       total?: number;
       enabled?: boolean;
+      issueChannel?: string;
+      claimable?: boolean;
+      perUserLimit?: number;
     }
   ) {
     return fetchJson<CouponItem>(`/admin/marketing/coupons/${couponId}`, {
@@ -455,6 +467,7 @@ export const apiClient = {
     flashSaleId: string,
     payload: {
       title?: string;
+      productId?: string;
       price?: number;
       stock?: number;
       enabled?: boolean;
@@ -486,6 +499,7 @@ export const apiClient = {
     groupBuyId: string,
     payload: {
       title?: string;
+      productId?: string;
       price?: number;
       groupSize?: number;
       enabled?: boolean;

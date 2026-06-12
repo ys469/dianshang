@@ -120,6 +120,12 @@ export interface MemberCouponPayload {
   status: string;
   enabled: boolean;
   remainingCount: number;
+  claimedCount: number;
+  issueChannel: string;
+  issueChannelLabel: string;
+  claimable: boolean;
+  perUserLimit: number;
+  canClaim: boolean;
 }
 
 export interface RechargePayload {
@@ -430,6 +436,12 @@ export const memberClient = {
   async getCoupons() {
     return fetchJson<MemberCouponPayload[]>('/member/coupons', {
       method: 'GET'
+    });
+  },
+
+  async claimCoupon(couponId: string) {
+    return fetchJson<MemberCouponPayload[]>(`/member/coupons/${couponId}/claim`, {
+      method: 'POST'
     });
   },
 

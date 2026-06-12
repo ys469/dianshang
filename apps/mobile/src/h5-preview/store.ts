@@ -1071,6 +1071,25 @@ export const useDemoMallStore = defineStore('demo-mall', {
       }
     },
 
+    async claimCoupon(couponId: string) {
+      try {
+        const memberCoupons = await memberClient.claimCoupon(couponId);
+        const profile = await memberClient.getProfile().catch(() => null);
+        this.memberCoupons = memberCoupons;
+        if (profile) {
+          this.applyMemberProfile(profile);
+        } else {
+          this.coupons = memberCoupons.reduce((sum, coupon) => sum + coupon.remainingCount, 0);
+        }
+        this.feedbackMessage = '优惠券领取成功，结算时可选择使用';
+        return createResult(true, this.feedbackMessage, memberCoupons);
+      } catch (error) {
+        this.feedbackMessage =
+          error instanceof Error ? error.message : '领取优惠券失败，请稍后重试';
+        return createResult(false, this.feedbackMessage);
+      }
+    },
+
     async recharge(amount = 100) {
       try {
         const result = await memberClient.recharge(amount);

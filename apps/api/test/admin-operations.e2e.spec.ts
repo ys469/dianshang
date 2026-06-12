@@ -265,4 +265,69 @@ describe('/admin operational workflows', () => {
       flashSaleSectionAfterResume.products.some((item: { id: string }) => item.id === 'p-003')
     ).toBe(true);
   });
+
+  it('lets admins switch activity products and hides activities when the linked product is off shelf', async () => {
+    const createFlashSale = await request(app.getHttpServer())
+      .post('/admin/marketing/flash-sales')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        title: 'Activity editable product',
+        productId: 'p-001',
+        price: 21.9,
+        stock: 8
+      });
+
+    expect(createFlashSale.status).toBe(201);
+    const flashSaleId = createFlashSale.body.data.id as string;
+
+    const switchFlashSale = await request(app.getHttpServer())
+      .patch(`/admin/marketing/flash-sales/${flashSaleId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        productId: 'p-002',
+        price: 18.8,
+        enabled: true
+      });
+
+    expect(switchFlashSale.status).toBe(200);
+    expect(switchFlashSale.body.data.productId).toBe('p-002');
+    expect(switchFlashSale.body.data.price).toBe(18.8);
+
+    const homeAfterSwitch = await request(app.getHttpServer()).get('/home');
+    const flashSaleSection = homeAfterSwitch.body.data.sections.find(
+      (section: { type: string }) => section.type === 'flash_sale'
+    );
+
+    expect(
+      flashSaleSection.products.some(
+        (item: { id: string; memberPrice: number }) => item.id === 'p-002' && item.memberPrice === 18.8
+      )
+    ).toBe(true);
+
+    const unlistProduct = await request(app.getHttpServer())
+      .patch('/admin/products/p-002')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ listed: false });
+
+    expect(unlistProduct.status).toBe(200);
+    expect(unlistProduct.body.data.listed).toBe(false);
+
+    const homeAfterUnlist = await request(app.getHttpServer()).get('/home');
+    const flashSaleSectionAfterUnlist = homeAfterUnlist.body.data.sections.find(
+      (section: { type: string }) => section.type === 'flash_sale'
+    );
+
+    expect(
+      flashSaleSectionAfterUnlist.products.some((item: { id: string }) => item.id === 'p-002')
+    ).toBe(false);
+
+    const adminFlashSales = await request(app.getHttpServer())
+      .get('/admin/marketing/flash-sales')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    const targetActivity = adminFlashSales.body.data.find(
+      (item: { id: string }) => item.id === flashSaleId
+    );
+    expect(targetActivity.productListed).toBe(false);
+  });
 });

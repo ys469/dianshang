@@ -16,11 +16,15 @@ type CouponDraft = {
   threshold: number;
   discount: number;
   total: number;
+  issueChannel: string;
+  claimable: boolean;
+  perUserLimit: number;
   enabled: boolean;
 };
 
 type FlashSaleDraft = {
   title: string;
+  productId: string;
   price: number;
   stock: number;
   enabled: boolean;
@@ -28,6 +32,7 @@ type FlashSaleDraft = {
 
 type GroupBuyDraft = {
   title: string;
+  productId: string;
   price: number;
   groupSize: number;
   enabled: boolean;
@@ -44,6 +49,15 @@ const tabs = [
   { key: 'flash_sale', label: '限时秒杀' },
   { key: 'group_buy', label: '拼团活动' },
   { key: 'checkin', label: '签到规则' }
+] as const;
+
+const couponChannelOptions = [
+  { label: '会员中心领取', value: 'member_center' },
+  { label: '新人注册自动发放', value: 'new_user' },
+  { label: '签到奖励', value: 'checkin' },
+  { label: '后台发放', value: 'admin_grant' },
+  { label: '邀请奖励', value: 'invite_reward' },
+  { label: '下单返券', value: 'order_reward' }
 ] as const;
 
 const products = ref<AdminProduct[]>([]);
@@ -64,7 +78,10 @@ const couponForm = reactive({
   title: '',
   threshold: 99,
   discount: 10,
-  total: 200
+  total: 200,
+  issueChannel: 'member_center',
+  claimable: true,
+  perUserLimit: 1
 });
 
 const flashSaleForm = reactive({
@@ -87,6 +104,9 @@ function syncCouponDraft(item: CouponItem) {
     threshold: item.threshold,
     discount: item.discount,
     total: item.total,
+    issueChannel: item.issueChannel,
+    claimable: item.claimable,
+    perUserLimit: item.perUserLimit,
     enabled: item.enabled
   };
 }
@@ -94,6 +114,7 @@ function syncCouponDraft(item: CouponItem) {
 function syncFlashSaleDraft(item: FlashSaleItem) {
   flashSaleDrafts[item.id] = {
     title: item.title,
+    productId: item.productId,
     price: item.price,
     stock: item.stock,
     enabled: item.enabled
@@ -103,6 +124,7 @@ function syncFlashSaleDraft(item: FlashSaleItem) {
 function syncGroupBuyDraft(item: GroupBuyItem) {
   groupBuyDrafts[item.id] = {
     title: item.title,
+    productId: item.productId,
     price: item.price,
     groupSize: item.groupSize,
     enabled: item.enabled
@@ -125,7 +147,7 @@ async function loadMarketingData() {
       apiClient.getCheckinRules()
     ]);
 
-  products.value = productList.filter((item) => item.listed);
+  products.value = productList;
   coupons.value = couponList;
   flashSales.value = flashSaleList;
   groupBuys.value = groupBuyList;
@@ -207,7 +229,10 @@ async function createCoupon() {
       title: couponForm.title.trim(),
       threshold: Number(couponForm.threshold),
       discount: Number(couponForm.discount),
-      total: Number(couponForm.total)
+      total: Number(couponForm.total),
+      issueChannel: couponForm.issueChannel,
+      claimable: couponForm.claimable,
+      perUserLimit: Number(couponForm.perUserLimit)
     });
 
     coupons.value = [created, ...coupons.value];
@@ -216,6 +241,9 @@ async function createCoupon() {
     couponForm.threshold = 99;
     couponForm.discount = 10;
     couponForm.total = 200;
+    couponForm.issueChannel = 'member_center';
+    couponForm.claimable = true;
+    couponForm.perUserLimit = 1;
     setFeedback('success', '优惠券已创建并可立即投放。');
   } catch (error) {
     setFeedback('error', error instanceof Error ? error.message : '创建优惠券失败。');
@@ -239,6 +267,9 @@ async function saveCoupon(couponId: string) {
       threshold: Number(draft.threshold),
       discount: Number(draft.discount),
       total: Number(draft.total),
+      issueChannel: draft.issueChannel,
+      claimable: draft.claimable,
+      perUserLimit: Number(draft.perUserLimit),
       enabled: draft.enabled
     });
 
@@ -310,6 +341,7 @@ async function saveFlashSale(flashSaleId: string) {
   try {
     const updated = await apiClient.updateFlashSale(flashSaleId, {
       title: draft.title.trim(),
+      productId: draft.productId,
       price: Number(draft.price),
       stock: Number(draft.stock),
       enabled: draft.enabled
@@ -383,6 +415,7 @@ async function saveGroupBuy(groupBuyId: string) {
   try {
     const updated = await apiClient.updateGroupBuy(groupBuyId, {
       title: draft.title.trim(),
+      productId: draft.productId,
       price: Number(draft.price),
       groupSize: Number(draft.groupSize),
       enabled: draft.enabled
@@ -482,13 +515,23 @@ function getStatusClass(enabled: boolean) {
         <div class="section-header">
           <div>
             <strong>优惠券投放</strong>
-            <p>支持直接调门槛、优惠金额、总量和启停状态。</p>
+            <p>支持配置领取渠道、每人限领、优惠门槛、库存总量和启停状态。</p>
           </div>
           <div class="inline-form">
             <input v-model="couponForm.title" class="field" placeholder="优惠券名称" />
             <input v-model="couponForm.threshold" class="field small" type="number" min="0" placeholder="门槛" />
             <input v-model="couponForm.discount" class="field small" type="number" min="0" placeholder="优惠" />
             <input v-model="couponForm.total" class="field small" type="number" min="1" placeholder="总量" />
+            <input v-model="couponForm.perUserLimit" class="field small" type="number" min="1" placeholder="限领" />
+            <select v-model="couponForm.issueChannel" class="field">
+              <option v-for="option in couponChannelOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <label class="switch-line compact">
+              <input v-model="couponForm.claimable" type="checkbox" />
+              <span>允许领取</span>
+            </label>
             <button class="action-btn primary" :disabled="savingKey === 'create-coupon'" @click="createCoupon">
               {{ savingKey === 'create-coupon' ? '创建中...' : '新建优惠券' }}
             </button>
@@ -501,6 +544,8 @@ function getStatusClass(enabled: boolean) {
               <th>名称</th>
               <th>门槛</th>
               <th>优惠</th>
+              <th>获取渠道</th>
+              <th>每人限领</th>
               <th>已领取</th>
               <th>总量</th>
               <th>状态</th>
@@ -527,6 +572,22 @@ function getStatusClass(enabled: boolean) {
                 </template>
                 <template v-else><span class="price">¥{{ item.discount }}</span></template>
               </td>
+              <td>
+                <template v-if="editingCouponId === item.id">
+                  <select v-model="couponDrafts[item.id].issueChannel" class="field">
+                    <option v-for="option in couponChannelOptions" :key="option.value" :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </template>
+                <template v-else>{{ item.issueChannelLabel }}</template>
+              </td>
+              <td>
+                <template v-if="editingCouponId === item.id">
+                  <input v-model="couponDrafts[item.id].perUserLimit" class="field small" type="number" min="1" />
+                </template>
+                <template v-else>{{ item.perUserLimit }} 张</template>
+              </td>
               <td>{{ item.used }}</td>
               <td>
                 <template v-if="editingCouponId === item.id">
@@ -535,7 +596,10 @@ function getStatusClass(enabled: boolean) {
                 <template v-else>{{ item.total }}</template>
               </td>
               <td>
-                <span :class="['tag', getStatusClass(item.enabled)]">{{ item.enabled ? '进行中' : '已暂停' }}</span>
+                <div class="status-stack">
+                  <span :class="['tag', getStatusClass(item.enabled)]">{{ item.enabled ? '进行中' : '已暂停' }}</span>
+                  <span class="muted-mini">{{ item.claimable ? '可领取' : '不可自主领取' }}</span>
+                </div>
               </td>
               <td>
                 <div class="action-row">
@@ -554,6 +618,10 @@ function getStatusClass(enabled: boolean) {
                   >
                     {{ savingKey === `coupon-${item.id}` ? '保存中...' : '保存' }}
                   </button>
+                  <label v-if="editingCouponId === item.id" class="switch-line compact">
+                    <input v-model="couponDrafts[item.id].claimable" type="checkbox" />
+                    <span>允许领取</span>
+                  </label>
                   <button
                     class="action-btn"
                     :disabled="savingKey === `coupon-toggle-${item.id}`"
@@ -578,7 +646,7 @@ function getStatusClass(enabled: boolean) {
             <input v-model="flashSaleForm.title" class="field" placeholder="活动名称" />
             <select v-model="flashSaleForm.productId" class="field">
               <option value="" disabled>选择商品</option>
-              <option v-for="product in products" :key="product.id" :value="product.id">
+              <option v-for="product in products.filter((item) => item.listed)" :key="product.id" :value="product.id">
                 {{ product.name }}
               </option>
             </select>
@@ -602,6 +670,7 @@ function getStatusClass(enabled: boolean) {
               <th>秒杀价</th>
               <th>库存</th>
               <th>已售</th>
+              <th>前台展示</th>
               <th>状态</th>
               <th>操作</th>
             </tr>
@@ -614,7 +683,21 @@ function getStatusClass(enabled: boolean) {
                 </template>
                 <template v-else>{{ item.title }}</template>
               </td>
-              <td>{{ item.productName }}</td>
+              <td>
+                <template v-if="editingFlashSaleId === item.id">
+                  <select v-model="flashSaleDrafts[item.id].productId" class="field">
+                    <option v-for="product in products" :key="product.id" :value="product.id">
+                      {{ product.name }}{{ product.listed ? '' : '（已下架）' }}
+                    </option>
+                  </select>
+                </template>
+                <template v-else>
+                  <div class="product-cell">
+                    <strong>{{ item.productName }}</strong>
+                    <span v-if="!item.productListed" class="muted-mini danger">商品已下架，前台不展示</span>
+                  </div>
+                </template>
+              </td>
               <td>
                 <template v-if="editingFlashSaleId === item.id">
                   <input v-model="flashSaleDrafts[item.id].price" class="field small" type="number" min="0" />
@@ -628,6 +711,11 @@ function getStatusClass(enabled: boolean) {
                 <template v-else>{{ item.stock }}</template>
               </td>
               <td>{{ item.sold }}</td>
+              <td>
+                <span :class="['tag', item.enabled && item.productListed && item.stock > item.sold ? 'tag-success' : 'tag-muted']">
+                  {{ item.enabled && item.productListed && item.stock > item.sold ? '首页秒杀区展示' : '前台隐藏' }}
+                </span>
+              </td>
               <td>
                 <span :class="['tag', getStatusClass(item.enabled)]">{{ item.status }}</span>
               </td>
@@ -672,7 +760,7 @@ function getStatusClass(enabled: boolean) {
             <input v-model="groupBuyForm.title" class="field" placeholder="活动名称" />
             <select v-model="groupBuyForm.productId" class="field">
               <option value="" disabled>选择商品</option>
-              <option v-for="product in products" :key="product.id" :value="product.id">
+              <option v-for="product in products.filter((item) => item.listed)" :key="product.id" :value="product.id">
                 {{ product.name }}
               </option>
             </select>
@@ -696,6 +784,7 @@ function getStatusClass(enabled: boolean) {
               <th>拼团价</th>
               <th>成团人数</th>
               <th>已成团</th>
+              <th>前台展示</th>
               <th>状态</th>
               <th>操作</th>
             </tr>
@@ -708,7 +797,21 @@ function getStatusClass(enabled: boolean) {
                 </template>
                 <template v-else>{{ item.title }}</template>
               </td>
-              <td>{{ item.productName }}</td>
+              <td>
+                <template v-if="editingGroupBuyId === item.id">
+                  <select v-model="groupBuyDrafts[item.id].productId" class="field">
+                    <option v-for="product in products" :key="product.id" :value="product.id">
+                      {{ product.name }}{{ product.listed ? '' : '（已下架）' }}
+                    </option>
+                  </select>
+                </template>
+                <template v-else>
+                  <div class="product-cell">
+                    <strong>{{ item.productName }}</strong>
+                    <span v-if="!item.productListed" class="muted-mini danger">商品已下架，前台不展示</span>
+                  </div>
+                </template>
+              </td>
               <td>
                 <template v-if="editingGroupBuyId === item.id">
                   <input v-model="groupBuyDrafts[item.id].price" class="field small" type="number" min="0" />
@@ -722,6 +825,11 @@ function getStatusClass(enabled: boolean) {
                 <template v-else>{{ item.groupSize }} 人</template>
               </td>
               <td>{{ item.completed }}</td>
+              <td>
+                <span :class="['tag', item.enabled && item.productListed ? 'tag-success' : 'tag-muted']">
+                  {{ item.enabled && item.productListed ? '首页拼团区展示' : '前台隐藏' }}
+                </span>
+              </td>
               <td>
                 <span :class="['tag', getStatusClass(item.enabled)]">{{ item.status }}</span>
               </td>
@@ -882,6 +990,38 @@ function getStatusClass(enabled: boolean) {
 
 .field.small {
   width: 96px;
+}
+
+.switch-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.switch-line.compact {
+  white-space: nowrap;
+}
+
+.status-stack,
+.product-cell {
+  display: grid;
+  gap: 6px;
+}
+
+.product-cell strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.muted-mini {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.muted-mini.danger {
+  color: #dc2626;
 }
 
 .action-btn,

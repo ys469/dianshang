@@ -1252,7 +1252,18 @@ function handleLogout() {
               <article v-for="coupon in memberCoupons" :key="coupon.id" class="info-card compact-card">
                 <strong>{{ coupon.title }}</strong>
                 <p>满 ¥{{ coupon.threshold }} 减 ¥{{ coupon.discount }}</p>
-                <p class="muted-text">剩余可用次数：{{ coupon.remainingCount }}</p>
+                <p class="muted-text">获取渠道：{{ coupon.issueChannelLabel }}</p>
+                <p class="muted-text">
+                  已有 {{ coupon.remainingCount }} 张，限领 {{ coupon.perUserLimit }} 张
+                </p>
+                <button
+                  v-if="coupon.canClaim"
+                  type="button"
+                  class="ghost-button"
+                  @click="mallStore.claimCoupon(coupon.id)"
+                >
+                  领取优惠券
+                </button>
               </article>
             </div>
             <div v-else class="empty-state compact">

@@ -139,7 +139,7 @@ describe('/admin linked data', () => {
     expect(productDetail.body.data.description).toContain('家庭日常营养补充');
   });
 
-  it('initializes a brand-new member profile with zero assets and preserves existing member history', async () => {
+  it('initializes a brand-new member profile with zero balance and auto-issued new-user coupons', async () => {
     const registerResponse = await request(app.getHttpServer()).post('/auth/register').send({
       mobile: '13900000001',
       email: 'new-member@example.com',
@@ -158,10 +158,22 @@ describe('/admin linked data', () => {
     expect(newMemberProfile.status).toBe(200);
     expect(newMemberProfile.body.data.balance).toBe(0);
     expect(newMemberProfile.body.data.points).toBe(0);
-    expect(newMemberProfile.body.data.coupons).toBe(0);
+    expect(newMemberProfile.body.data.coupons).toBeGreaterThanOrEqual(1);
     expect(newMemberProfile.body.data.growthValue).toBe(0);
     expect(newMemberProfile.body.data.totalOrders).toBe(0);
     expect(newMemberProfile.body.data.totalSpent).toBe(0);
+
+    const newMemberCoupons = await request(app.getHttpServer())
+      .get('/member/coupons')
+      .set('Authorization', `Bearer ${newMemberToken}`);
+
+    expect(newMemberCoupons.status).toBe(200);
+    expect(
+      newMemberCoupons.body.data.some(
+        (item: { issueChannel: string; remainingCount: number }) =>
+          item.issueChannel === 'new_user' && item.remainingCount > 0
+      )
+    ).toBe(true);
 
     const existingProfileBefore = await request(app.getHttpServer())
       .get('/member/profile')
@@ -187,6 +199,89 @@ describe('/admin linked data', () => {
     expect(existingProfileAfter.body.data.coupons).toBe(existingProfileBefore.body.data.coupons);
     expect(existingProfileAfter.body.data.totalOrders).toBe(existingProfileBefore.body.data.totalOrders);
     expect(existingProfileAfter.body.data.totalSpent).toBe(existingProfileBefore.body.data.totalSpent);
+  });
+
+  it('lets admins configure coupon acquisition channels and members claim usable coupon types', async () => {
+    const couponResponse = await request(app.getHttpServer())
+      .post('/admin/marketing/coupons')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        title: '会员中心测试券',
+        threshold: 20,
+        discount: 6,
+        total: 5,
+        issueChannel: 'member_center',
+        claimable: true,
+        perUserLimit: 1
+      });
+
+    expect(couponResponse.status).toBe(201);
+    expect(couponResponse.body.data.issueChannel).toBe('member_center');
+    expect(couponResponse.body.data.claimable).toBe(true);
+
+    const couponId = couponResponse.body.data.id as string;
+
+    const couponsBeforeClaim = await request(app.getHttpServer())
+      .get('/member/coupons')
+      .set('Authorization', `Bearer ${memberToken}`);
+
+    const beforeTarget = couponsBeforeClaim.body.data.find(
+      (item: { id: string }) => item.id === couponId
+    );
+    expect(beforeTarget.remainingCount).toBe(0);
+    expect(beforeTarget.canClaim).toBe(true);
+
+    const claimResponse = await request(app.getHttpServer())
+      .post(`/member/coupons/${couponId}/claim`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({});
+
+    expect(claimResponse.status).toBe(201);
+    const claimedTarget = claimResponse.body.data.find(
+      (item: { id: string }) => item.id === couponId
+    );
+    expect(claimedTarget.remainingCount).toBe(1);
+    expect(claimedTarget.canClaim).toBe(false);
+
+    const orderResponse = await request(app.getHttpServer())
+      .post('/orders')
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({
+        fulfillmentMode: 'delivery',
+        paymentMethod: 'balance',
+        consignee: 'Coupon Buyer',
+        mobile: '13800138000',
+        address: 'Shanghai Coupon Road 1',
+        couponId,
+        items: [
+          {
+            productId: 'p-001',
+            quantity: 1,
+            pricingSourceType: 'catalog',
+            expectedUnitPrice: 49.9
+          }
+        ]
+      });
+
+    expect(orderResponse.status).toBe(201);
+    expect(orderResponse.body.data.couponTitle).toBe('会员中心测试券');
+    expect(orderResponse.body.data.couponDiscount).toBe(6);
+    expect(orderResponse.body.data.payableAmount).toBe(43.9);
+
+    const couponsAfterOrder = await request(app.getHttpServer())
+      .get('/member/coupons')
+      .set('Authorization', `Bearer ${memberToken}`);
+    const afterTarget = couponsAfterOrder.body.data.find(
+      (item: { id: string }) => item.id === couponId
+    );
+    expect(afterTarget.remainingCount).toBe(0);
+
+    const adminCoupons = await request(app.getHttpServer())
+      .get('/admin/marketing/coupons')
+      .set('Authorization', `Bearer ${adminToken}`);
+    const adminTarget = adminCoupons.body.data.find((item: { id: string }) => item.id === couponId);
+    expect(adminTarget.used).toBe(1);
+    expect(adminTarget.issueChannelLabel).toBe('会员中心领取');
   });
 
   it('creates orders with member contact info and updates product sales metrics', async () => {
